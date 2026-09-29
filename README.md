@@ -38,8 +38,11 @@ Pick **OpenAI** in the dropdown next to the title. Nothing to configure either:
   is recomputed from the token counts.
 
 Token counts only exist once a tool has made a request: Codex writes its session log after the
-first message, so a fresh install shows an empty Tokens tab until then. OpenAI's usage endpoint
-has no token history, so use in ChatGPT itself is not counted. Codex logs compressed to `.jsonl.zst` (an experimental Codex setting)
+first message, so a fresh install shows no token counts until then. Above them, the OpenAI Tokens
+tab shows **Plan usage**: the plan's recent weekly windows with the share of each used and the
+split by model, from the same endpoint as Codex's `/usage`
+(`wham/usage/plan_limit_history`). That covers every surface (CLI, IDE, cloud, OpenCode) but
+is aggregated daily by OpenAI, so the current window can lag the live limit by up to a day. Codex logs compressed to `.jsonl.zst` (an experimental Codex setting)
 are skipped.
 
 ## Build and run

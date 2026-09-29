@@ -44,7 +44,10 @@ struct TokensView: View {
 
     var body: some View {
         let mine = tokens.records.filter { $0.provider == provider }
-        if tokens.loaded && mine.isEmpty { empty } else { content(mine) }
+        VStack(alignment: .leading, spacing: 10) {
+            if provider == .openai, let h = tokens.planHistory { PlanHistoryCard(history: h) }
+            if tokens.loaded && mine.isEmpty { empty } else { content(mine) }
+        }
     }
 
     /// Nothing logged for this provider inside the 30-day horizon: say why instead of drawing
@@ -71,6 +74,9 @@ struct TokensView: View {
         case .claude:
             return "No Claude usage in the last 30 days. Counts appear after your next Claude Code or OpenCode request."
         case .openai:
+            if tokens.planHistory != nil {
+                return "Token counts come from Codex and OpenCode logs on this Mac, and there are none from the last 30 days yet. Codex writes its log once you send a message."
+            }
             if has(.codex) { return "No Codex requests in the last 30 days. Counts appear after your next message in Codex." }
             return "No usage yet. Token counts come from Codex's session logs, which Codex writes once you send a message"
                 + (has(.opencode) ? ", and from OpenAI messages in OpenCode (none in the last 30 days)." : ".")
@@ -242,4 +248,91 @@ struct ModelList: View {
             }
         }
     }
+}
+
+/// The ChatGPT plan's recent windows, as Codex's /usage shows them. Click a window to see which
+/// models used it. Covers every surface (Codex CLI, IDE, cloud, OpenCode), unlike the token counts.
+struct PlanHistoryCard: View {
+    let history: PlanHistory
+    @State private var selected: String?
+    @Environment(\.theme) private var t
+
+    var body: some View {
+        let now = Date()
+        let chosen = history.periods.first { $0.id == selected } ?? history.periods[0]
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Plan usage", systemImage: "calendar")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(t.subtext)
+                    Spacer()
+                    if let d = history.asOf { Text("as of \(day(d))").font(.caption).foregroundStyle(t.muted) }
+                }
+                ForEach(history.periods.prefix(5)) { p in
+                    Button { withAnimation(.easeOut(duration: 0.2)) { selected = p.id } } label: {
+                        row(p, current: p.end > now, chosen: p.id == chosen.id)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if !chosen.byModel.isEmpty {
+                    Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5)
+                    Text("By model, \(range(chosen))").font(.caption).foregroundStyle(t.muted)
+                    ForEach(chosen.byModel.prefix(4), id: \.name) { m in
+                        HStack {
+                            Text(m.name).font(.system(size: 12, weight: .medium))
+                            Spacer()
+                            Text(pct(m.value)).font(.system(size: 12, design: .rounded).monospacedDigit())
+                                .foregroundStyle(t.muted)
+                        }
+                    }
+                }
+            }
+        }
+        .help("Share of each window's limit used, across Codex CLI, IDE, cloud and OpenCode. Updated daily by OpenAI.")
+    }
+
+    private func row(_ p: PlanPeriod, current: Bool, chosen: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(range(p)).font(.system(size: 12, weight: chosen ? .semibold : .regular))
+                if current {
+                    Text("Now").font(.caption2.weight(.semibold)).foregroundStyle(t.accent)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(t.accent.opacity(0.14)))
+                }
+                Spacer()
+                Text(pct(p.used)).font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+            }
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(t.track)
+                    Capsule().fill(t.level(p.used))
+                        .frame(width: p.used > 0 ? max(4, g.size.width * min(1, p.used / 100)) : 0)
+                }
+            }
+            .frame(height: 5)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(chosen ? t.accent.opacity(0.08) : .clear))
+        .contentShape(Rectangle())
+    }
+
+    /// "Sep 19 to Sep 26", or "Sep 26, 11:46am to 4:57pm" for a window that ended early.
+    private func range(_ p: PlanPeriod) -> String {
+        let cal = Calendar.current
+        if cal.isDate(p.start, inSameDayAs: p.end) { return "\(day(p.start)), \(time(p.start)) to \(time(p.end))" }
+        return "\(day(p.start)) to \(day(p.end))"
+    }
+
+    private func day(_ d: Date) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "MMM d"
+        return f.string(from: d)
+    }
+
+    private func time(_ d: Date) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "h:mma"
+        return f.string(from: d).replacingOccurrences(of: "AM", with: "am").replacingOccurrences(of: "PM", with: "pm")
+    }
+
+    private func pct(_ v: Double) -> String { v > 0 && v < 1 ? "<1%" : "\(Int(v.rounded()))%" }
 }

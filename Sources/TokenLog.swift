@@ -117,6 +117,9 @@ final class TokenStore: ObservableObject {
     /// Why the live fetch is not working, shown under the limits. Nil when it works or when
     /// Codex is not signed in with ChatGPT at all.
     @Published private(set) var liveError: String?
+    /// Past windows of the ChatGPT plan, from the endpoint behind Codex's /usage.
+    @Published private(set) var planHistory: PlanHistory?
+    private var nextHistoryAt = Date.distantPast
     private var liveInterval: TimeInterval = 120
     private var nextLiveAt = Date.distantPast
     private var fetchingLive = false
@@ -167,7 +170,12 @@ final class TokenStore: ObservableObject {
             defer { fetchingLive = false }
             do {
                 guard let auth = try await Task.detached(operation: readCodexAuth).value else {
-                    liveLimits = nil; liveError = nil; return
+                    liveLimits = nil; liveError = nil; planHistory = nil; return
+                }
+                // Aggregated daily on the server, so every ten minutes is plenty.
+                if Date() >= nextHistoryAt, let h = try? await fetchPlanHistory(auth) {
+                    planHistory = h.periods.isEmpty ? nil : h
+                    nextHistoryAt = Date().addingTimeInterval(600)
                 }
                 let live = try await fetchCodexLimits(auth)
                 liveLimits = live.usage.limits.isEmpty ? nil : live
