@@ -22,9 +22,10 @@ fix it.) `make-cert.sh` is no longer needed.
 Pick **OpenAI** in the dropdown next to the title. Nothing to configure either:
 
 - **Limits** come live from the endpoint Codex's `/status` uses (`chatgpt.com/backend-api/wham/usage`),
-  with the access token `codex login` stored in `~/.codex/auth.json` (or `$CODEX_HOME`). The app
-  never refreshes that token: refresh tokens are single-use, so doing it here would sign Codex
-  out. When the token has expired, or Codex keeps its login in the Keychain
+  with the access token `codex login` stored in `~/.codex/auth.json` (or `$CODEX_HOME`), or else
+  the one OpenCode's ChatGPT login stored in `~/.local/share/opencode/auth.json`. The app never
+  refreshes these tokens: refresh tokens are single-use, so doing it here would sign those tools
+  out. When both have expired, or Codex keeps its login in the Keychain
   (`cli_auth_credentials_store = "keyring"`), the panel shows the last snapshot Codex wrote to its
   session logs instead, marked with its time. A window whose reset time has passed shows as empty.
 - **Tokens** come from Codex's session logs (`~/.codex/sessions/**/rollout-*.jsonl`, one usage
@@ -36,8 +37,9 @@ Pick **OpenAI** in the dropdown next to the title. Nothing to configure either:
   2026-09-29), in `Sources/Pricing.swift`. OpenCode logs a ChatGPT login's cost as 0, so the cost
   is recomputed from the token counts.
 
-OpenCode does not record ChatGPT plan limits, so with OpenCode alone the Limits tab stays empty
-until Codex has run once. Codex logs compressed to `.jsonl.zst` (an experimental Codex setting)
+Token counts only exist once a tool has made a request: Codex writes its session log after the
+first message, so a fresh install shows an empty Tokens tab until then. OpenAI's usage endpoint
+has no token history, so use in ChatGPT itself is not counted. Codex logs compressed to `.jsonl.zst` (an experimental Codex setting)
 are skipped.
 
 ## Build and run
