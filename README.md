@@ -1,4 +1,4 @@
-# ClaudeUsageBar
+# Mr. Usage
 
 A very small macOS menu bar app that shows what `/usage` shows in Claude Code (session limit,
 weekly limit, extra usage credits) and the same for a ChatGPT plan used through Codex CLI, plus
@@ -62,8 +62,16 @@ setting) are skipped.
 
 ```sh
 ./build.sh
-open build/ClaudeUsageBar.app
+open 'build/Mr. Usage.app'
 ```
+
+The build requires Swift 6+ and macOS 13+, resolves the pinned Sparkle 2.10.0 package, and packages a standalone app. Local builds are ad-hoc signed; published downloads are Developer ID-signed and notarized.
+
+### Automatic app updates
+
+Install **Mr. Usage.app** in Applications. Sparkle checks for new releases hourly and automatically downloads signed updates, which install when the app quits. You can also choose **Install and Relaunch** when offered. The footer's download-circle menu provides **Check for Updates…** and toggles for automatic checks and installation.
+
+The app verifies both update feeds and archives with an embedded public EdDSA key. Private signing keys stay in the release Mac's Keychain. The feed is `https://github.com/t1llo/mr-usage/releases/latest/download/appcast.xml`; downloads work once this repository is public. Older app builds without Sparkle need a one-time manual upgrade.
 
 Click the percentages in the menu bar to open the panel. It has two tabs:
 
@@ -92,7 +100,7 @@ If the Keychain read fails momentarily (Claude Code rewrites the item when it re
 the token), the last seen token is reused.
 
 To start it automatically, tick "Open at Login" in the menu. It registers the app bundle
-at its current path, so keep `build/ClaudeUsageBar.app` where it is (or move it to
+at its current path, so keep `build/Mr. Usage.app` where it is (or move it to
 `/Applications` first, then tick the item).
 
 ## Layout
@@ -109,4 +117,6 @@ at its current path, so keep `build/ClaudeUsageBar.app` where it is (or move it 
 - `Sources/Store.swift`: polling schedule and backoff
 - `Sources/Usage.swift`: token read, API call, parsing, formatting
 - `Info.plist`: marks it as a menu-bar-only app (`LSUIElement`)
-- `build.sh`: compiles with `swiftc` into `build/ClaudeUsageBar.app`
+- `Package.swift`: app target and pinned Sparkle updater dependency
+- `Sources/UpdateService.swift`: automatic updates and update menu
+- `build.sh`: builds and packages `build/Mr. Usage.app`, including Sparkle and its license

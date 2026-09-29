@@ -4,9 +4,19 @@
 <dict>
     <key>CFBundleExecutable</key>        <string>ClaudeUsageBar</string>
     <key>CFBundleIdentifier</key>        <string>local.tillobeffa.ClaudeUsageBar</string>
-    <key>CFBundleName</key>              <string>ClaudeUsageBar</string>
+    <key>CFBundleName</key>              <string>Mr. Usage</string>
+    <key>CFBundleDisplayName</key>       <string>Mr. Usage</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.3</string>
+    <key>CFBundleShortVersionString</key><string>1.0.0</string>
+    <key>CFBundleVersion</key>          <string>1</string>
+    <key>SUFeedURL</key><string>https://github.com/t1llo/mr-usage/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>D1GLPr1oMNbTOKSqo562dKexroSfgapQKLZnT446qQA=</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUAutomaticallyUpdate</key><true/>
+    <key>SUScheduledCheckInterval</key><integer>3600</integer>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+    <key>SURequireSignedFeed</key><true/>
+    <key>SUEnableSystemProfiling</key><false/>
     <key>LSMinimumSystemVersion</key>    <string>13.0</string>
     <key>LSUIElement</key>               <true/>
 </dict>

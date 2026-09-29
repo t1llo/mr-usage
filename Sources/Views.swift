@@ -317,6 +317,7 @@ struct UsagePanel: View {
                     .foregroundStyle(openAtLogin ? t.accent : t.muted)
             }
             Spacer()
+            SoftwareUpdateMenu().foregroundStyle(t.muted)
             Button("Quit") { NSApp.terminate(nil) }
                 .foregroundStyle(t.muted)
                 .keyboardShortcut("q")
