@@ -5,6 +5,7 @@ import SwiftUI
 extension TokenMetric {
     func color(_ t: Theme) -> Color {
         switch self {
+        case .cost: return t.green
         case .input: return t.blue
         case .output: return t.cyan
         case .cacheWrite: return t.orange
@@ -13,6 +14,7 @@ extension TokenMetric {
     }
     var icon: String {
         switch self {
+        case .cost: return "dollarsign.circle.fill"
         case .input: return "arrow.down.circle.fill"
         case .output: return "arrow.up.circle.fill"
         case .cacheWrite: return "square.and.arrow.down.fill"
@@ -21,6 +23,7 @@ extension TokenMetric {
     }
     var help: String {
         switch self {
+        case .cost: return "What these tokens would cost at Anthropic API list prices, cache and fast mode included"
         case .input: return "Uncached input tokens sent to the model"
         case .output: return "Tokens the model generated, thinking included"
         case .cacheWrite: return "Input tokens written to the prompt cache"
@@ -32,7 +35,7 @@ extension TokenMetric {
 struct TokensView: View {
     @ObservedObject var tokens: TokenStore
     @AppStorage("tokenRange") private var range: TokenRange = .week
-    @AppStorage("tokenMetric") private var metric: TokenMetric = .output
+    @AppStorage("tokenMetric") private var metric: TokenMetric = .cost
     @State private var hovered: Date?
     @Environment(\.theme) private var t
 
@@ -51,12 +54,19 @@ struct TokensView: View {
                     }
                 }
             }
+            MetricTile(metric: .cost, value: s.totals[.cost] ?? 0, selected: metric == .cost,
+                       caption: "if billed at API prices") { metric = .cost }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(TokenMetric.allCases) { m in
+                ForEach(TokenMetric.tokenKinds) { m in
                     MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == metric) { metric = m }
                 }
             }
-            if !s.byModel.isEmpty { Card { ModelList(rows: s.byModel, color: metric.color(t)) } }
+            if !s.byModel.isEmpty { Card { ModelList(rows: s.byModel, metric: metric) } }
+            if metric == .cost, !s.unpriced.isEmpty {
+                Text("No API price for \(s.unpriced.sorted().joined(separator: ", ")), left out of the cost")
+                    .font(.caption2).foregroundStyle(t.warn)
+                    .frame(maxWidth: .infinity)
+            }
             Text("From Claude Code sessions on this Mac")
                 .font(.caption2).foregroundStyle(t.muted)
                 .frame(maxWidth: .infinity)
@@ -67,10 +77,10 @@ struct TokensView: View {
     private func readout(_ s: TokenSummary) -> some View {
         let b = hovered.flatMap { h in s.buckets.first { $0.start == h } }
         return VStack(alignment: .leading, spacing: 1) {
-            Text(compact(b?.value ?? s.totals[metric] ?? 0))
+            Text(metric.format(b?.value ?? s.totals[metric] ?? 0))
                 .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
                 .contentTransition(.numericText())
-            Text("\(metric.rawValue.lowercased()) · \(b.map { bucketLabel($0.start) } ?? "last \(range.rawValue)")")
+            Text("\(metric == .cost ? "API cost" : metric.rawValue.lowercased()) · \(b.map { bucketLabel($0.start) } ?? "last \(range.rawValue)")")
                 .font(.caption).foregroundStyle(t.muted)
         }
     }
@@ -91,7 +101,7 @@ struct TokensView: View {
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { v in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3])).foregroundStyle(t.border)
-                AxisValueLabel { if let n = v.as(Int.self) { Text(compact(n)).foregroundStyle(t.muted) } }
+                AxisValueLabel { if let n = v.as(Double.self) { Text(metric == .cost ? "$" + compact(n) : compact(n)).foregroundStyle(t.muted) } }
             }
         }
         .chartXAxis {
@@ -121,8 +131,9 @@ struct TokensView: View {
 /// One total; clicking it switches the chart and model list to that metric.
 struct MetricTile: View {
     let metric: TokenMetric
-    let value: Int
+    let value: Double
     let selected: Bool
+    var caption: String?
     let action: () -> Void
     @Environment(\.theme) private var t
 
@@ -133,9 +144,12 @@ struct MetricTile: View {
                 Label(metric.rawValue, systemImage: metric.icon)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(selected ? c : t.muted)
-                Text(compact(value))
-                    .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-                    .contentTransition(.numericText())
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(metric.format(value))
+                        .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
+                        .contentTransition(.numericText())
+                    if let caption { Text(caption).font(.caption).foregroundStyle(t.muted) }
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -152,28 +166,28 @@ struct MetricTile: View {
 }
 
 struct ModelList: View {
-    let rows: [(name: String, value: Int)]
-    let color: Color
+    let rows: [(name: String, value: Double)]
+    let metric: TokenMetric
     @Environment(\.theme) private var t
 
     var body: some View {
         let top = rows.prefix(4)
-        let total = max(1, rows.reduce(0) { $0 + $1.value })
+        let total = max(0.000_001, rows.reduce(0) { $0 + $1.value })
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(top), id: \.name) { r in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(r.name).font(.system(size: 12, weight: .medium))
                         Spacer()
-                        Text("\(compact(r.value)) · \(Int((Double(r.value) / Double(total) * 100).rounded()))%")
+                        Text("\(metric.format(r.value)) · \(Int((r.value / total * 100).rounded()))%")
                             .font(.system(size: 12, design: .rounded).monospacedDigit())
                             .foregroundStyle(t.muted)
                     }
                     GeometryReader { g in
                         ZStack(alignment: .leading) {
                             Capsule().fill(t.track)
-                            Capsule().fill(color)
-                                .frame(width: max(4, g.size.width * Double(r.value) / Double(total)))
+                            Capsule().fill(metric.color(t))
+                                .frame(width: max(4, g.size.width * r.value / total))
                         }
                     }
                     .frame(height: 4)

@@ -33,6 +33,10 @@ Click the percentages in the menu bar to open the panel. It has two tabs:
   counts come from Claude Code's transcripts in `~/.claude/projects`, so they cover Claude Code
   on this Mac only (not claude.ai or other machines). Responses that appear on several lines or
   in several files are counted once.
+- **API cost**: what the same usage would cost on the Anthropic API at list prices, priced per
+  response from its model, cache writes (5-minute at 1.25x input, 1-hour at 2x), cache reads and
+  fast mode. It is the default chart. Prices live in `Sources/Pricing.swift` (as of 2026-09-25);
+  a model missing from that table is left out of the cost and named under the chart.
 
 The palette button in the header switches between Tokyo Night (default), Catppuccin Mocha and
 Catppuccin Latte. Refreshes every minute and when you open the panel.
@@ -55,6 +59,7 @@ at its current path, so keep `build/ClaudeUsageBar.app` where it is (or move it 
 - `Sources/Views.swift`: the panel and the Limits tab
 - `Sources/TokensView.swift`: the Tokens tab
 - `Sources/TokenLog.swift`: incremental transcript reader and token aggregation
+- `Sources/Pricing.swift`: API price table and per-response cost
 - `Sources/Theme.swift`: color themes and the pill segmented control
 - `Sources/Store.swift`: polling schedule and backoff
 - `Sources/Usage.swift`: token read, API call, parsing, formatting

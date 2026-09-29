@@ -10,6 +10,8 @@ struct TokenRecord {
     let output: Int
     let cacheWrite: Int
     let cacheRead: Int
+    /// API list-price equivalent in USD, nil when the model is not in `apiPrices`.
+    let cost: Double?
 }
 
 /// Reads transcripts incrementally: files are append-only, so each pass only parses the bytes
@@ -76,11 +78,16 @@ actor TokenScanner {
               let model = m["model"] as? String, model != "<synthetic>"
         else { return }
         let key = "\(m["id"] as? String ?? "")|\(d["requestId"] as? String ?? d["uuid"] as? String ?? "")"
-        let r = TokenRecord(date: date, model: model,
-                            input: u["input_tokens"] as? Int ?? 0,
-                            output: u["output_tokens"] as? Int ?? 0,
-                            cacheWrite: u["cache_creation_input_tokens"] as? Int ?? 0,
-                            cacheRead: u["cache_read_input_tokens"] as? Int ?? 0)
+        let input = u["input_tokens"] as? Int ?? 0
+        let output = u["output_tokens"] as? Int ?? 0
+        let cacheWrite = u["cache_creation_input_tokens"] as? Int ?? 0
+        let cacheRead = u["cache_read_input_tokens"] as? Int ?? 0
+        // The TTL split matters for cost (1-hour writes cost more); without it, assume 5-minute.
+        let write1h = min(cacheWrite, (u["cache_creation"] as? [String: Any])?["ephemeral_1h_input_tokens"] as? Int ?? 0)
+        let cost = apiCost(model: model, input: input, output: output, cacheWrite5m: cacheWrite - write1h,
+                           cacheWrite1h: write1h, cacheRead: cacheRead, fast: u["speed"] as? String == "fast")
+        let r = TokenRecord(date: date, model: model, input: input, output: output,
+                            cacheWrite: cacheWrite, cacheRead: cacheRead, cost: cost)
         if let old = records[key], old.output >= r.output { return }
         records[key] = r
     }
@@ -107,16 +114,28 @@ final class TokenStore: ObservableObject {
 // MARK: - Aggregation
 
 enum TokenMetric: String, CaseIterable, Identifiable {
-    case input = "Input", output = "Output", cacheWrite = "Cache write", cacheRead = "Cache read"
+    case cost = "API cost", input = "Input", output = "Output", cacheWrite = "Cache write", cacheRead = "Cache read"
     var id: String { rawValue }
+    static let tokenKinds: [TokenMetric] = [.input, .output, .cacheWrite, .cacheRead]
 
-    func value(_ r: TokenRecord) -> Int {
+    func value(_ r: TokenRecord) -> Double {
         switch self {
-        case .input: return r.input
-        case .output: return r.output
-        case .cacheWrite: return r.cacheWrite
-        case .cacheRead: return r.cacheRead
+        case .cost: return r.cost ?? 0
+        case .input: return Double(r.input)
+        case .output: return Double(r.output)
+        case .cacheWrite: return Double(r.cacheWrite)
+        case .cacheRead: return Double(r.cacheRead)
         }
+    }
+
+    /// "$1,234", "$12.34" for cost; "4.56M" for tokens.
+    func format(_ v: Double) -> String {
+        guard self == .cost else { return compact(v) }
+        if v >= 1000 {
+            let f = NumberFormatter(); f.numberStyle = .decimal; f.maximumFractionDigits = 0
+            return "$" + (f.string(from: NSNumber(value: v)) ?? "\(Int(v))")
+        }
+        return String(format: "$%.2f", v)
     }
 }
 
@@ -129,26 +148,29 @@ enum TokenRange: String, CaseIterable, Identifiable {
 
 struct TokenBucket: Identifiable {
     let start: Date
-    let value: Int
+    let value: Double
     var id: Date { start }
 }
 
 struct TokenSummary {
     var buckets: [TokenBucket] = []
-    var totals: [TokenMetric: Int] = [:]
+    var totals: [TokenMetric: Double] = [:]
     /// Selected metric per model, largest first.
-    var byModel: [(name: String, value: Int)] = []
+    var byModel: [(name: String, value: Double)] = []
+    /// Models in range that have no API price, so their tokens are missing from the cost.
+    var unpriced: Set<String> = []
 }
 
 func summarize(_ records: [TokenRecord], range: TokenRange, metric: TokenMetric, now: Date = Date()) -> TokenSummary {
     let cal = Calendar.current
     let last = cal.dateInterval(of: range.unit, for: now)!.start
     let starts = (0..<range.count).map { cal.date(byAdding: range.unit, value: $0 - range.count + 1, to: last)! }
-    var perBucket: [Date: Int] = [:]
-    var perModel: [String: Int] = [:]
+    var perBucket: [Date: Double] = [:]
+    var perModel: [String: Double] = [:]
     var s = TokenSummary()
     for r in records where r.date >= starts[0] {
         for m in TokenMetric.allCases { s.totals[m, default: 0] += m.value(r) }
+        if r.cost == nil { s.unpriced.insert(modelName(r.model)) }
         let v = metric.value(r)
         perBucket[cal.dateInterval(of: range.unit, for: r.date)!.start, default: 0] += v
         perModel[modelName(r.model), default: 0] += v
@@ -169,10 +191,9 @@ func modelName(_ id: String) -> String {
 }
 
 /// 950, 12.3K, 4.56M, 1.2B.
-func compact(_ n: Int) -> String {
-    let d = Double(n)
+func compact(_ d: Double) -> String {
     if d >= 1e9 { return String(format: "%.1fB", d / 1e9) }
     if d >= 1e6 { return String(format: d >= 1e8 ? "%.0fM" : "%.2fM", d / 1e6) }
     if d >= 1e3 { return String(format: d >= 1e5 ? "%.0fK" : "%.1fK", d / 1e3) }
-    return "\(n)"
+    return String(Int(d))
 }
