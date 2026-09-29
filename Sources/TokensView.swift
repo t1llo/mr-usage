@@ -43,8 +43,43 @@ struct TokensView: View {
     @Environment(\.theme) private var t
 
     var body: some View {
-        let s = summarize(tokens.records, provider: provider, range: range, metric: metric)
-        VStack(alignment: .leading, spacing: 10) {
+        let mine = tokens.records.filter { $0.provider == provider }
+        if tokens.loaded && mine.isEmpty { empty } else { content(mine) }
+    }
+
+    /// Nothing logged for this provider inside the 30-day horizon: say why instead of drawing
+    /// an empty chart that looks broken.
+    private var empty: some View {
+        VStack(spacing: 10) {
+            Card {
+                VStack(spacing: 8) {
+                    Image(systemName: "chart.bar.xaxis").font(.title3).foregroundStyle(t.muted)
+                    Text(emptyText)
+                        .font(.callout).foregroundStyle(t.subtext)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, minHeight: 110)
+            }
+            Text(footnote(nil)).font(.caption2).foregroundStyle(t.muted).frame(maxWidth: .infinity)
+        }
+    }
+
+    private var emptyText: String {
+        let has = tokens.sources.contains
+        switch provider {
+        case .claude:
+            return "No Claude usage in the last 30 days. Counts appear after your next Claude Code or OpenCode request."
+        case .openai:
+            if has(.codex) { return "No Codex requests in the last 30 days. Counts appear after your next message in Codex." }
+            return "No usage yet. Token counts come from Codex's session logs, which Codex writes once you send a message"
+                + (has(.opencode) ? ", and from OpenAI messages in OpenCode (none in the last 30 days)." : ".")
+        }
+    }
+
+    private func content(_ mine: [TokenRecord]) -> some View {
+        let s = summarize(mine, provider: provider, range: range, metric: metric)
+        return VStack(alignment: .leading, spacing: 10) {
             Card {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .firstTextBaseline) {
@@ -70,18 +105,18 @@ struct TokensView: View {
                     .font(.caption2).foregroundStyle(t.warn)
                     .frame(maxWidth: .infinity)
             }
-            Text(footnote)
+            Text(footnote(Set(mine.map(\.source))))
                 .font(.caption2).foregroundStyle(t.muted)
                 .frame(maxWidth: .infinity)
         }
     }
 
     /// Which tools the numbers come from, or where they would come from.
-    private var footnote: String {
+    private func footnote(_ used: Set<Source>?) -> String {
         let tools: [Source] = provider == .claude ? [.claudeCode, .opencode] : [.codex, .opencode]
-        let found = tools.filter { tokens.sources.contains($0) }
-        let names = (found.isEmpty ? tools : found).map(\.rawValue).joined(separator: " and ")
-        return found.isEmpty ? "No \(names) logs on this Mac yet" : "From \(names) sessions on this Mac"
+        let found = tools.filter { used?.contains($0) ?? false }
+        if found.isEmpty { return "Reads \(tools.map(\.rawValue).joined(separator: " and ")) logs on this Mac" }
+        return "From \(found.map(\.rawValue).joined(separator: " and ")) sessions on this Mac"
     }
 
     /// Hovered bucket's value, or the range total for the selected metric.

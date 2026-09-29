@@ -1,26 +1,46 @@
 // Live ChatGPT plan limits: the endpoint Codex's /status calls, authenticated with the access
-// token Codex CLI stored in $CODEX_HOME/auth.json. Strictly read-only: refresh tokens are
-// single-use, so refreshing here would log Codex out. When the token has expired the panel
-// falls back to the last snapshot in Codex's logs until Codex refreshes it on its next run.
+// token Codex CLI ($CODEX_HOME/auth.json) or OpenCode (~/.local/share/opencode/auth.json) stored
+// for the ChatGPT login. Strictly read-only: refresh tokens are single-use, so refreshing here
+// would log those tools out. When both tokens have expired the panel falls back to the last
+// snapshot in Codex's logs until one of them refreshes its token on its next run.
 import Foundation
 
 struct CodexAuth { let token: String; let account: String? }
 
 enum CodexAuthError: LocalizedError {
     case expired
-    var errorDescription: String? { "Codex login expired, run `codex` once" }
+    var errorDescription: String? { "ChatGPT login expired, run Codex or OpenCode once" }
 }
 
-/// Nil when Codex is not signed in with ChatGPT (API-key logins have no plan limits), or keeps
-/// its credentials in the Keychain instead of auth.json.
+/// The first unexpired ChatGPT token, Codex's before OpenCode's. Nil when neither is signed in
+/// with ChatGPT (API-key logins have no plan limits) or Codex keeps its login in the Keychain.
 func readCodexAuth() throws -> CodexAuth? {
-    let url = CodexScanner.home.appendingPathComponent("auth.json")
-    guard let data = try? Data(contentsOf: url),
-          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let tokens = root["tokens"] as? [String: Any],
-          let token = tokens["access_token"] as? String else { return nil }
-    if let exp = jwtExpiry(token), exp < Date().addingTimeInterval(60) { throw CodexAuthError.expired }
-    return CodexAuth(token: token, account: tokens["account_id"] as? String)
+    let soon = Date().addingTimeInterval(60)
+    var sawExpired = false
+    for (token, account, expires) in [codexToken(), openCodeToken()].compactMap({ $0 }) {
+        if (expires ?? jwtExpiry(token) ?? .distantFuture) < soon { sawExpired = true; continue }
+        return CodexAuth(token: token, account: account)
+    }
+    if sawExpired { throw CodexAuthError.expired }
+    return nil
+}
+
+private func json(at url: URL) -> [String: Any]? {
+    (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+}
+
+/// {"tokens": {"access_token", "account_id"}}.
+private func codexToken() -> (String, String?, Date?)? {
+    guard let t = json(at: CodexScanner.home.appendingPathComponent("auth.json"))?["tokens"] as? [String: Any],
+          let access = t["access_token"] as? String else { return nil }
+    return (access, t["account_id"] as? String, nil)
+}
+
+/// {"openai": {"type": "oauth", "access", "expires" (ms), "accountId"}}.
+private func openCodeToken() -> (String, String?, Date?)? {
+    guard let o = json(at: OpenCodeReader.dataDir.appendingPathComponent("auth.json"))?["openai"] as? [String: Any],
+          o["type"] as? String == "oauth", let access = o["access"] as? String else { return nil }
+    return (access, o["accountId"] as? String, (o["expires"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) })
 }
 
 /// The `exp` claim of a JWT, without verifying it; only used to avoid a request bound to fail.
