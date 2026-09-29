@@ -5,7 +5,7 @@ import SwiftUI
 extension TokenMetric {
     func color(_ t: Theme) -> Color {
         switch self {
-        case .cost: return t.green
+        case .cost: return t.accent
         case .input: return t.blue
         case .output: return t.cyan
         case .cacheWrite: return t.orange
