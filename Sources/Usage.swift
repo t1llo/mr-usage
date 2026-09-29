@@ -6,6 +6,8 @@ struct Limit: Identifiable {
     let label: String
     let pct: Double
     let resetsAt: Date?
+    /// Length of the rolling window, used for the even-pace marker. Nil hides the marker.
+    let window: TimeInterval?
 }
 struct Credits { let usedCents: Double; let limitCents: Double? }
 struct Usage { var limits: [Limit] = []; var credits: Credits? }
@@ -79,15 +81,16 @@ func fetchUsage(token: String) async throws -> Usage {
 
 func parse(_ json: [String: Any]) -> Usage {
     var usage = Usage()
-    let keys: [(String, String)] = [
-        ("five_hour", "Session"),
-        ("seven_day", "Week"),
-        ("seven_day_sonnet", "Week · Sonnet"),
-        ("seven_day_opus", "Week · Opus"),
+    let week: TimeInterval = 7 * 86_400
+    let keys: [(String, String, TimeInterval)] = [
+        ("five_hour", "Session", 5 * 3600),
+        ("seven_day", "Week", week),
+        ("seven_day_sonnet", "Week · Sonnet", week),
+        ("seven_day_opus", "Week · Opus", week),
     ]
-    for (key, label) in keys {
+    for (key, label, window) in keys {
         guard let d = json[key] as? [String: Any], let pct = d["utilization"] as? Double else { continue }
-        usage.limits.append(Limit(id: key, label: label, pct: pct, resetsAt: isoDate(d["resets_at"])))
+        usage.limits.append(Limit(id: key, label: label, pct: pct, resetsAt: isoDate(d["resets_at"]), window: window))
     }
     if let e = json["extra_usage"] as? [String: Any], e["is_enabled"] as? Bool == true,
        let used = e["used_credits"] as? Double {

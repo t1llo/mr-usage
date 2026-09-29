@@ -44,13 +44,10 @@ struct PaceInfo {
 }
 
 extension Limit {
-    /// Session windows are five hours, everything else is weekly.
-    var windowLength: TimeInterval { id == "five_hour" ? 5 * 3600 : 7 * 86_400 }
-
     /// Nil when there is no active window (the API sends no reset date until the first message).
     func pace(now: Date) -> PaceInfo? {
-        guard let reset = resetsAt else { return nil }
-        let elapsed = min(1, max(0, 1 - reset.timeIntervalSince(now) / windowLength))
+        guard let reset = resetsAt, let window, window > 0 else { return nil }
+        let elapsed = min(1, max(0, 1 - reset.timeIntervalSince(now) / window))
         let used = pct / 100
         // A ten-point band counts as "on pace" so the label does not flap around the line.
         let pace: Pace = pct >= 100 ? .exhausted
