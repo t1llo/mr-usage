@@ -73,7 +73,7 @@ Install **Mr. Usage.app** in Applications. Sparkle checks for new releases hourl
 
 The app verifies both update feeds and archives with an embedded public EdDSA key. Private signing keys stay in the release Mac's Keychain. The feed is `https://github.com/t1llo/mr-usage/releases/latest/download/appcast.xml`; downloads work once this repository is public. Older app builds without Sparkle need a one-time manual upgrade.
 
-Click the percentages in the menu bar to open the panel. It has two tabs:
+Click the percentages in the menu bar to open the panel. Both providers have two tabs:
 
 - **Limits**: the five-hour session as a ring with a countdown to its reset, then the weekly
   limits and extra-usage credits as bars. Each rolling window has a marker for where usage would
@@ -89,7 +89,10 @@ Click the percentages in the menu bar to open the panel. It has two tabs:
   a model missing from that table is left out of the cost and named under the chart.
 
 The menu bar shows the selected provider's percentages. The palette button in the header
-switches between Tokyo Night (default), Catppuccin Mocha and Catppuccin Latte. Refreshes every minute and when you open the panel.
+shows color previews for Tokyo Night (default), Catppuccin Mocha and Catppuccin Latte.
+The gear beside Refresh opens **Settings**, where you can save your leaderboard name and
+billing preferences. **Done** returns to usage. The panel keeps the same size while switching
+pages, with scrollbar-free scrolling for longer content. Refreshes every minute and when you open the panel.
 
 If a refresh fails, the last good numbers stay on screen and a status line says why and
 when the next attempt is. On HTTP 429 (rate limited) or a server error the polling interval
@@ -103,17 +106,69 @@ To start it automatically, tick "Open at Login" in the menu. It registers the ap
 at its current path, so keep `build/Mr. Usage.app` where it is (or move it to
 `/Applications` first, then tick the item).
 
+## Leaderboard
+
+The production website is [usage.beffa.xyz](https://usage.beffa.xyz), hard-coded through
+`LeaderboardConfiguration.origin` in `Sources/Leaderboard.swift`. Names and billing preferences
+can be saved locally before turning on sharing.
+
+1. Open **Settings** using the gear beside Refresh.
+2. Enter your display name.
+3. For **Claude Code** and **Codex**, choose **Subscription**, **API billed**, or **Not shared**.
+   Historical logs cannot reliably identify billing. The selection applies to all retained
+   shared history for that tool; leave mixed/unknown history unshared.
+4. Click **Save profile**, turn on **Share on leaderboard**, and use **Open leaderboard**
+   to visit the rankings.
+
+Sharing is **off by default**. Only your chosen name and daily token counts grouped by model,
+provider and billing category are uploaded. Prompts, conversations, source code, API keys,
+OAuth tokens and project paths are never sent. OpenCode remains in the local charts and is not
+uploaded by this integration. The new OpenAI **All devices** estimates also remain local: the
+leaderboard uses exact **This Mac** log categories, avoiding double-counting account totals.
+
+The subscription board displays **estimated API-equivalent value**, not your subscription
+bill. API-billed usage is also a standard-rate estimate, not a verified provider invoice.
+The website calculates prices independently from its versioned price list; its estimates
+can differ from the app’s per-response costs, which also account for fast mode.
+
+The first sync includes the most recent **30 UTC days**. Older shared daily aggregates are
+retained locally so the leaderboard’s all-time total can grow beyond the scanners’ 31-day
+window. Recent days are replaced, never incremented twice. Sync runs every five minutes,
+including while the panel is closed, with backoff and Retry-After handling on errors.
+
+Turn sharing off to delete the public profile and all its usage. An in-flight upload finishes
+before the removal request; offline removals persist and retry after reconnection or restart.
+Existing profiles keep their original service address for updates and removal. All-time aggregate
+history is cleared on successful removal. Sharing again requires another explicit opt-in.
+
+A dedicated random leaderboard credential and aggregate history are stored in
+`~/Library/Application Support/ClaudeUsageBar/leaderboard.json` (owner-only file permissions,
+inside an owner-only directory). This is separate from provider authentication. Local HTTP
+origins (`localhost`, `127.0.0.1`, `::1`) are accepted for development; remote sites require HTTPS.
+Redirects are refused so credentials stay on the configured origin.
+
+Run isolated sharing checks with `sh test-leaderboard.sh`. To also test native Swift upload,
+server-side pricing and removal against the website's local preview:
+
+```sh
+LEADERBOARD_TEST_ORIGIN=http://127.0.0.1:4173 sh test-leaderboard.sh
+```
+
+These tests use synthetic counts and a temporary state file; they do not read provider logs.
+
 ## Layout
 
 - `Sources/main.swift`: app entry, SwiftUI `MenuBarExtra`
 - `Sources/Views.swift`: the panel and the Limits tab
 - `Sources/TokensView.swift`: the Tokens tab
 - `Sources/TokenLog.swift`: Claude Code transcript reader, the token store, aggregation
+- `Sources/Leaderboard.swift`: opt-in state, aggregate archive, sync and removal
+- `Sources/LeaderboardView.swift`: leaderboard profile and sharing settings
 - `Sources/CodexLog.swift`: Codex session log reader (tokens and logged limits)
 - `Sources/OpenCodeLog.swift`: OpenCode database reader
 - `Sources/OpenAIUsage.swift`: live ChatGPT plan limits with Codex's login
 - `Sources/Pricing.swift`: Anthropic and OpenAI price tables and per-response cost
-- `Sources/Theme.swift`: color themes and the pill segmented control
+- `Sources/Theme.swift`: color themes, appearance picker, toolbar buttons and the pill segmented control
 - `Sources/Store.swift`: polling schedule and backoff
 - `Sources/Usage.swift`: token read, API call, parsing, formatting
 - `Info.plist`: marks it as a menu-bar-only app (`LSUIElement`)

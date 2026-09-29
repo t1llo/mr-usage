@@ -8,17 +8,21 @@ import SwiftUI
 struct ClaudeUsageBarApp: App {
     @NSApplicationDelegateAdaptor(MrUsageAppDelegate.self) private var appDelegate
     @StateObject private var store = Store()
-    @StateObject private var tokens = TokenStore()
+    @StateObject private var tokens: TokenStore
+    @StateObject private var leaderboard: LeaderboardStore
 
     init() {
         // Refuse to run twice: a second instance would double the request rate.
         let me = Bundle.main.bundleIdentifier ?? "local.tillobeffa.ClaudeUsageBar"
         if NSRunningApplication.runningApplications(withBundleIdentifier: me).count > 1 { exit(0) }
+        let tokens = TokenStore()
+        _tokens = StateObject(wrappedValue: tokens)
+        _leaderboard = StateObject(wrappedValue: LeaderboardStore(tokens: tokens))
     }
 
     var body: some Scene {
         MenuBarExtra {
-            UsagePanel(store: store, tokens: tokens)
+            UsagePanel(store: store, tokens: tokens, leaderboard: leaderboard)
         } label: {
             MenuTitle(store: store, tokens: tokens)
         }

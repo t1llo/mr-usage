@@ -71,6 +71,68 @@ extension EnvironmentValues {
     }
 }
 
+/// Explicitly themed controls stay visible in both light and dark menu bar panels.
+struct PanelToolbarButtonStyle: ButtonStyle {
+    var selected = false
+    @Environment(\.theme) private var t
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(selected ? t.accent : t.subtext)
+            .frame(width: 28, height: 28)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(selected || configuration.isPressed ? t.accent.opacity(0.14) : t.card))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(selected ? t.accent.opacity(0.6) : t.border.opacity(0.75), lineWidth: 0.75))
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+}
+
+struct ThemePicker: View {
+    @Binding var selection: String
+    @Environment(\.theme) private var t
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Appearance")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(t.muted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+            ForEach(Theme.all) { theme in
+                Button {
+                    selection = theme.id
+                    dismiss()
+                } label: {
+                    HStack(spacing: 10) {
+                        HStack(spacing: -3) {
+                            Circle().fill(theme.base)
+                            Circle().fill(theme.accent)
+                            Circle().fill(theme.green)
+                        }
+                        .frame(width: 40, height: 15)
+                        .accessibilityHidden(true)
+                        Text(theme.name).font(.system(size: 12, weight: .medium))
+                        Spacer(minLength: 0)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(t.accent)
+                            .opacity(selection == theme.id ? 1 : 0)
+                    }
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(selection == theme.id ? t.accent.opacity(0.12) : .clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(selection == theme.id ? "Selected" : "")
+            }
+        }
+    }
+}
+
 /// Pill-shaped segmented control in theme colors; the selection slides between options.
 struct Segmented<T: Hashable>: View {
     let options: [T]
@@ -95,11 +157,13 @@ struct Segmented<T: Hashable>: View {
                         }
                     }
                     .contentShape(Capsule())
-                    .onTapGesture { withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { selection = o } }
+                    .onTapGesture { selection = o }
             }
         }
         .padding(2)
         .background(Capsule().fill(t.track.opacity(0.7)))
         .overlay(Capsule().strokeBorder(t.border.opacity(0.6), lineWidth: 0.5))
+        // Animate the pill, without passing a spring transaction to the page it selects.
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: selection)
     }
 }

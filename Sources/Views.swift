@@ -1,6 +1,7 @@
 // The panel that drops down from the menu bar. A provider picker (Claude or OpenAI) in the header,
 // then two tabs: Limits (session as a ring hero, other limits as bars, each with an even-pace
 // marker) and Tokens (see TokensView.swift).
+import AppKit
 import ServiceManagement
 import SwiftUI
 
@@ -90,49 +91,81 @@ func dayClock(_ d: Date) -> String {
 struct UsagePanel: View {
     @ObservedObject var store: Store
     @ObservedObject var tokens: TokenStore
+    @ObservedObject var leaderboard: LeaderboardStore
     @AppStorage("theme") private var themeID = Theme.tokyoNight.id
     @AppStorage("tab") private var tab: PanelTab = .limits
     @AppStorage("provider") private var provider: Provider = .claude
     @State private var picking = false
+    @State private var choosingTheme = false
+    @State private var showingSettings = false
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
 
     private var t: Theme { Theme.named(themeID) }
+    private var panelHeight: CGFloat { min(680, (NSScreen.main?.visibleFrame.height ?? 700) - 20) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            Segmented(options: PanelTab.allCases, selection: $tab, fill: true) { $0.rawValue }
             Group {
-                switch tab {
-                case .limits:
-                    // Re-render every 30 s so countdowns and pace markers stay current while open.
-                    TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                        switch provider {
-                        case .claude: claudeLimits(now: ctx.date)
-                        case .openai: openAILimits(now: ctx.date)
-                        }
+                if showingSettings {
+                    HStack {
+                        Text("Settings").font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        Button("Done") { showingSettings = false }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(t.accent)
                     }
-                case .tokens:
-                    TokensView(tokens: tokens, provider: provider)
+                    .padding(.horizontal, 2)
+                } else {
+                    Segmented(options: PanelTab.allCases, selection: $tab, fill: true) { $0.rawValue }
                 }
             }
-            .transition(.opacity)
-            if provider == .claude, store.usage != nil, let e = store.lastError, !store.inFlight {
-                ErrorBanner(text: "Couldn't refresh: \(e). Retrying at \(clock(store.nextFetchAt)).")
+            .frame(height: 28)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if showingSettings {
+                        LeaderboardSettingsView(leaderboard: leaderboard)
+                    } else {
+                        tabContent
+                        if provider == .claude, store.usage != nil, let e = store.lastError, !store.inFlight {
+                            ErrorBanner(text: "Couldn't refresh: \(e). Retrying at \(clock(store.nextFetchAt)).")
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // Each page starts at the top rather than inheriting another page's scroll offset.
+            .id(showingSettings ? "settings" : "\(provider.rawValue)/\(tab.rawValue)")
             footer
         }
         .padding(14)
-        .frame(width: 320)
+        // MenuBarExtra repositions when its intrinsic size changes. Keep its viewport stable
+        // across tabs, providers and refreshes; longer pages scroll below the fixed header.
+        .frame(width: 320, height: panelHeight, alignment: .top)
         .background(background)
         .foregroundStyle(t.text)
         .environment(\.theme, t)
         .preferredColorScheme(t.isDark ? .dark : .light)
-        .animation(.easeOut(duration: 0.2), value: tab)
         .onAppear { store.tick(); tokens.refresh() }
         .onChange(of: tab) { if $0 == .tokens { tokens.refresh() } }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
-            if tab == .tokens { tokens.refresh() }
+            if tab == .tokens && !showingSettings { tokens.refresh() }
+        }
+    }
+
+    @ViewBuilder private var tabContent: some View {
+        switch tab {
+        case .limits:
+            // Re-render every 30 s so countdowns and pace markers stay current while open.
+            TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                switch provider {
+                case .claude: claudeLimits(now: ctx.date)
+                case .openai: openAILimits(now: ctx.date)
+                }
+            }
+        case .tokens:
+            TokensView(tokens: tokens, provider: provider)
         }
     }
 
@@ -141,32 +174,42 @@ struct UsagePanel: View {
     private var header: some View {
         HStack(spacing: 8) {
             providerPicker
-            Spacer()
-            Text(subtitle).font(.caption).foregroundStyle(t.muted).monospacedDigit()
-            Menu {
-                ForEach(Theme.all) { theme in
-                    Button { themeID = theme.id } label: {
-                        if theme.id == themeID { Label(theme.name, systemImage: "checkmark") } else { Text(theme.name) }
-                    }
+            Spacer(minLength: 0)
+            HStack(spacing: 4) {
+                Button { choosingTheme.toggle() } label: {
+                    Image(systemName: "paintpalette.fill")
                 }
-            } label: {
-                Image(systemName: "paintpalette.fill")
+                .buttonStyle(PanelToolbarButtonStyle(selected: choosingTheme))
+                .help("Choose color theme")
+                .accessibilityLabel("Color theme")
+                .accessibilityValue(t.name)
+                .popover(isPresented: $choosingTheme, arrowEdge: .bottom) {
+                    ThemePicker(selection: $themeID)
+                        .padding(8)
+                        .frame(width: 250)
+                        .foregroundStyle(t.text)
+                        .background(t.card)
+                        .environment(\.theme, t)
+                        .preferredColorScheme(t.isDark ? .dark : .light)
+                }
+                Button { store.tick(); tokens.refresh() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .rotationEffect(.degrees(store.inFlight ? 360 : 0))
+                        .animation(store.inFlight ? .linear(duration: 1).repeatForever(autoreverses: false) : .default,
+                                   value: store.inFlight)
+                }
+                .buttonStyle(PanelToolbarButtonStyle())
+                .keyboardShortcut("r")
+                .help("Refresh")
+                .accessibilityLabel("Refresh usage")
+                Button { showingSettings.toggle() } label: {
+                    Image(systemName: "gearshape.fill")
+                }
+                .buttonStyle(PanelToolbarButtonStyle(selected: showingSettings))
+                .keyboardShortcut(",")
+                .help("Settings")
+                .accessibilityLabel("Settings")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Theme")
-            Button { store.tick(); tokens.refresh() } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(t.subtext)
-                    .rotationEffect(.degrees(store.inFlight ? 360 : 0))
-                    .animation(store.inFlight ? .linear(duration: 1).repeatForever(autoreverses: false) : .default,
-                               value: store.inFlight)
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("r")
-            .help("Refresh")
         }
         .padding(.horizontal, 2)
     }
@@ -220,9 +263,8 @@ struct UsagePanel: View {
         }
     }
 
-    /// Close the list first and switch on the next pass without animation: animating the
-    /// whole panel while the menu bar window resizes to the other provider's height and the
-    /// popover closes is what made the switch stutter.
+    /// Close the list before replacing its source view, keeping the popover dismissal and
+    /// provider content update out of the same animated transaction.
     private func choose(_ p: Provider) {
         picking = false
         guard p != provider else { return }
@@ -230,16 +272,6 @@ struct UsagePanel: View {
             var tx = Transaction()
             tx.disablesAnimations = true
             withTransaction(tx) { provider = p }
-        }
-    }
-
-    private var subtitle: String {
-        switch provider {
-        case .claude:
-            if store.inFlight { return "Refreshing…" }
-            return store.lastGoodAt.map(clock) ?? ""
-        case .openai:
-            return tokens.codexLimits.map { $0.live ? clock($0.asOf) : "as of \(dayClock($0.asOf))" } ?? ""
         }
     }
 

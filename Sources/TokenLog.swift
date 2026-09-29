@@ -27,6 +27,8 @@ struct TokenRecord {
     let cacheRead: Int
     /// API list-price equivalent in USD, nil when the model is not in `apiPrices`.
     let cost: Double?
+    /// Part of cacheWrite, retained separately for the leaderboard's pricing.
+    var cacheWrite1h: Int = 0
 }
 
 /// Reads transcripts incrementally: files are append-only, so each pass only parses the bytes
@@ -102,7 +104,7 @@ actor TokenScanner {
         let cost = apiCost(model: model, input: input, output: output, cacheWrite5m: cacheWrite - write1h,
                            cacheWrite1h: write1h, cacheRead: cacheRead, fast: u["speed"] as? String == "fast")
         let r = TokenRecord(date: date, model: model, provider: .claude, source: .claudeCode, input: input, output: output,
-                            cacheWrite: cacheWrite, cacheRead: cacheRead, cost: cost)
+                            cacheWrite: cacheWrite, cacheRead: cacheRead, cost: cost, cacheWrite1h: write1h)
         if let old = records[key], old.output >= r.output { return }
         records[key] = r
     }
