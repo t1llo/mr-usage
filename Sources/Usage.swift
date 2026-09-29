@@ -107,14 +107,19 @@ func isoDate(_ any: Any?) -> Date? {
 
 // MARK: - Formatting
 
-/// "in 2h 14m", "in 3d 4h", "in 12m".
-func countdown(to date: Date?, now: Date = Date()) -> String {
+/// "2h 14m", "3d 4h", "12m".
+func remaining(to date: Date?, now: Date = Date()) -> String {
     guard let date else { return "" }
     let mins = max(0, Int(date.timeIntervalSince(now) / 60))
     let d = mins / 1440, h = (mins % 1440) / 60, m = mins % 60
-    if d > 0 { return "in \(d)d \(h)h" }
-    if h > 0 { return "in \(h)h \(m)m" }
-    return "in \(m)m"
+    if d > 0 { return "\(d)d \(h)h" }
+    if h > 0 { return "\(h)h \(m)m" }
+    return "\(m)m"
+}
+
+/// "in 2h 14m", "in 3d 4h", "in 12m".
+func countdown(to date: Date?, now: Date = Date()) -> String {
+    date == nil ? "" : "in " + remaining(to: date, now: now)
 }
 
 /// "3:40pm", "Thu 9am", "Oct 4".
