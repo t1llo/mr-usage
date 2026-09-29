@@ -179,6 +179,9 @@ exercise upload, pricing, and removal against a local API instance:
 LEADERBOARD_TEST_ORIGIN=http://127.0.0.1:4173 sh scripts/test-leaderboard.sh
 ```
 
+GitHub Actions runs Gitleaks against the full Git history on every push and pull request.
+The check fails if secrets are detected and redacts secret values from its output.
+
 ### Source layout
 
 - `Sources/main.swift`, `Views.swift`, `TokensView.swift`, `Theme.swift`: app and interface.
