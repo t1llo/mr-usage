@@ -37,15 +37,12 @@ struct LeaderboardSettingsView: View {
                         }))
                         .toggleStyle(.switch).controlSize(.small)
                         .disabled(leaderboard.state.pendingRemoval)
+                    sharingDetails
                 }
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text(leaderboard.status).foregroundStyle(t.subtext)
                 if let error = leaderboard.lastError { Text(error).foregroundStyle(t.warn) }
-                Text("Shares your name and daily Claude Code/Codex token totals by model. Prompts, code, keys and OpenCode logs stay local. Starts with 30 days; older shared totals are retained until you leave.")
-                    .foregroundStyle(t.muted)
-                Text("Subscription dollars are API-equivalent value; API dollars are estimates, not verified bills.")
-                    .foregroundStyle(t.muted)
                 if let origin = website {
                     Link(destination: origin.appendingPathComponent("leaderboard")) {
                         Label("Open leaderboard", systemImage: "arrow.up.right.square")
@@ -74,6 +71,46 @@ struct LeaderboardSettingsView: View {
             return try? leaderboardOrigin(leaderboard.state.website)
         }
         return LeaderboardConfiguration.origin
+    }
+
+    private var sharingDetails: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Sends your display name and daily token counts, grouped by tool, model and billing category, to \((website ?? LeaderboardConfiguration.origin).host ?? "the leaderboard").")
+                .foregroundStyle(t.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    sharingDetail("Uploaded fields", """
+                    • Your chosen display name.
+                    • UTC date, tool (Claude Code or Codex) and model ID for each daily total.
+                    • Your billing category: Subscription or API billed.
+                    • Uncached input token count.
+                    • Output token count, including reasoning.
+                    • Cache-read token count.
+                    • Cache-write counts, split into 5-minute and 1-hour writes.
+                    """)
+                    sharingDetail("Connection data", "A random, leaderboard-only authentication token, data-format version and sharing-consent flag are also sent. Requests include an app identifier; the server also sees your IP address.")
+                    sharingDetail("Shown publicly", "Your name, rank, total tokens, estimated API value/spend, tools used, active days, recent daily usage and last sync time. The website calculates dollar estimates from the counts; these are not subscription charges or verified bills.")
+                    sharingDetail("History and removal", "Syncs about every 5 minutes. Starts with the last 30 UTC days and retains older daily totals for all-time rankings. Tools set to Not shared are excluded. Turning sharing off requests deletion of your profile and uploaded totals; offline removals retry when connected.")
+                    sharingDetail("Not uploaded", "Prompts, responses, code, file or project paths, session or request IDs, provider API keys or login tokens, plan limits, payment details, OpenCode usage, or ChatGPT All devices estimates.")
+                }
+                .padding(.top, 8)
+            } label: {
+                Text("Exactly what gets shared")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(t.accent)
+            }
+            .tint(t.accent)
+        }
+        .font(.system(size: 11))
+    }
+
+    private func sharingDetail(_ title: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).fontWeight(.semibold).foregroundStyle(t.subtext)
+            Text(text).foregroundStyle(t.muted).fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func billingPicker(_ label: String, selection: Binding<LeaderboardBilling>) -> some View {

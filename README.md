@@ -91,7 +91,8 @@ Click the percentages in the menu bar to open the panel. Both providers have two
 The menu bar shows the selected provider's percentages. The palette button in the header
 shows color previews for Tokyo Night (default), Catppuccin Mocha and Catppuccin Latte.
 The gear beside Refresh opens **Settings**, where you can save your leaderboard name and
-billing preferences. **Done** returns to usage. The panel keeps the same size while switching
+billing preferences. The **Limits** and **Tokens** tabs stay visible in Settings; click either
+tab, click **×**, or press **Escape** to return to usage. The panel keeps the same size while switching
 pages, with scrollbar-free scrolling for longer content. Refreshes every minute and when you open the panel.
 
 If a refresh fails, the last good numbers stay on screen and a status line says why and
@@ -120,9 +121,15 @@ can be saved locally before turning on sharing.
 4. Click **Save profile**, turn on **Share on leaderboard**, and use **Open leaderboard**
    to visit the rankings.
 
-Sharing is **off by default**. Only your chosen name and daily token counts grouped by model,
-provider and billing category are uploaded. Prompts, conversations, source code, API keys,
-OAuth tokens and project paths are never sent. OpenCode remains in the local charts and is not
+Sharing is **off by default**. **Exactly what gets shared**, directly below the sharing toggle,
+lists the complete upload: your chosen display name and rows containing the UTC date, tool,
+model ID, billing category, uncached input tokens, output tokens (including reasoning), cache-read
+tokens, and separate 5-minute and 1-hour cache-write counts. Requests also send a dedicated
+leaderboard authentication token, data-format version, sharing-consent flag and app identifier;
+the server sees your connection's IP address. Dollar estimates are calculated by the website.
+
+Prompts, conversations, source code, provider API keys, OAuth tokens, project paths, session IDs,
+plan limits and payment details are not uploaded. OpenCode remains in the local charts and is not
 uploaded by this integration. The new OpenAI **All devices** estimates also remain local: the
 leaderboard uses exact **This Mac** log categories, avoiding double-counting account totals.
 

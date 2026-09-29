@@ -138,6 +138,7 @@ struct Segmented<T: Hashable>: View {
     let options: [T]
     @Binding var selection: T
     var fill = false
+    var showsSelection = true
     let label: (T) -> String
     @Environment(\.theme) private var t
     @Namespace private var ns
@@ -145,14 +146,15 @@ struct Segmented<T: Hashable>: View {
     var body: some View {
         HStack(spacing: 2) {
             ForEach(options, id: \.self) { o in
+                let selected = showsSelection && o == selection
                 Text(label(o))
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(o == selection ? t.base : t.subtext)
+                    .foregroundStyle(selected ? t.base : t.subtext)
                     .padding(.vertical, 4)
                     .padding(.horizontal, 10)
                     .frame(maxWidth: fill ? .infinity : nil)
                     .background {
-                        if o == selection {
+                        if selected {
                             Capsule().fill(t.accent).matchedGeometryEffect(id: "pill", in: ns)
                         }
                     }

@@ -106,21 +106,10 @@ struct UsagePanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            Group {
-                if showingSettings {
-                    HStack {
-                        Text("Settings").font(.system(size: 13, weight: .semibold))
-                        Spacer()
-                        Button("Done") { showingSettings = false }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(t.accent)
-                    }
-                    .padding(.horizontal, 2)
-                } else {
-                    Segmented(options: PanelTab.allCases, selection: $tab, fill: true) { $0.rawValue }
-                }
-            }
+            Segmented(options: PanelTab.allCases, selection: Binding(
+                get: { tab },
+                set: { tab = $0; showingSettings = false }
+            ), fill: true, showsSelection: !showingSettings) { $0.rawValue }
             .frame(height: 28)
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -173,7 +162,11 @@ struct UsagePanel: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            providerPicker
+            if showingSettings {
+                Text("Settings").font(.system(size: 15, weight: .semibold, design: .rounded))
+            } else {
+                providerPicker
+            }
             Spacer(minLength: 0)
             HStack(spacing: 4) {
                 Button { choosingTheme.toggle() } label: {
@@ -203,12 +196,12 @@ struct UsagePanel: View {
                 .help("Refresh")
                 .accessibilityLabel("Refresh usage")
                 Button { showingSettings.toggle() } label: {
-                    Image(systemName: "gearshape.fill")
+                    Image(systemName: showingSettings ? "xmark" : "gearshape.fill")
                 }
                 .buttonStyle(PanelToolbarButtonStyle(selected: showingSettings))
-                .keyboardShortcut(",")
-                .help("Settings")
-                .accessibilityLabel("Settings")
+                .keyboardShortcut(showingSettings ? .escape : ",", modifiers: showingSettings ? [] : .command)
+                .help(showingSettings ? "Back to usage (Esc)" : "Settings")
+                .accessibilityLabel(showingSettings ? "Close settings" : "Settings")
             }
         }
         .padding(.horizontal, 2)
