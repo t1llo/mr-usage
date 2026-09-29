@@ -108,23 +108,13 @@ struct UsagePanel: View {
         }
     }
 
-    /// Theme base with two faint accent glows, so the panel has depth without looking busy.
-    private var background: some View {
-        ZStack {
-            t.base
-            RadialGradient(colors: [t.accent.opacity(t.isDark ? 0.16 : 0.10), .clear],
-                           center: .topLeading, startRadius: 0, endRadius: 260)
-            RadialGradient(colors: [t.accent2.opacity(t.isDark ? 0.12 : 0.08), .clear],
-                           center: .bottomTrailing, startRadius: 0, endRadius: 300)
-        }
-        .ignoresSafeArea()
-    }
+    private var background: some View { t.base.ignoresSafeArea() }
 
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkle")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(t.accentGradient)
+                .foregroundStyle(t.accent)
             Text("Claude usage").font(.system(size: 15, weight: .semibold, design: .rounded))
             Spacer()
             Text(subtitle).font(.caption).foregroundStyle(t.muted).monospacedDigit()
@@ -240,8 +230,7 @@ struct Card<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(t.card))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(LinearGradient(colors: [t.border, t.border.opacity(0.3)],
-                                             startPoint: .top, endPoint: .bottom), lineWidth: 0.75))
+                .strokeBorder(t.border.opacity(0.6), lineWidth: 0.75))
     }
 }
 
@@ -343,7 +332,7 @@ struct SessionCard: View {
     }
 }
 
-/// Gradient arc on a faint track. `marker` (0...1) drops a dot where the arc would end
+/// Arc on a faint track. `marker` (0...1) drops a dot where the arc would end
 /// at an even pace, so the gap between dot and arc tip is the story at a glance.
 struct RingGauge: View {
     let pct: Double
@@ -354,19 +343,13 @@ struct RingGauge: View {
 
     var body: some View {
         let fill = min(1, pct / 100)
-        let (from, to) = pct >= 90 ? (t.red.opacity(0.6), t.red) : pct >= 75 ? (t.warn.opacity(0.6), t.warn) : (t.accent, t.accent2)
         ZStack {
             Circle()
                 .stroke(t.track, lineWidth: lineWidth)
             Circle()
                 .trim(from: 0, to: fill)
-                .stroke(
-                    AngularGradient(colors: [from, to], center: .center,
-                                    startAngle: .degrees(0), endAngle: .degrees(360 * max(fill, 0.02))),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-                )
+                .stroke(t.level(pct), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .shadow(color: to.opacity(0.5), radius: 6)
                 .animation(.easeOut(duration: 0.7), value: pct)
             if let marker {
                 GeometryReader { g in
@@ -414,9 +397,8 @@ struct BarRow: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(t.track)
                     Capsule()
-                        .fill(t.levelGradient(pct))
+                        .fill(t.level(pct))
                         .frame(width: pct > 0 ? max(8, g.size.width * min(1, pct / 100)) : 0)
-                        .shadow(color: t.level(pct).opacity(0.45), radius: 4)
                         .animation(.easeOut(duration: 0.7), value: pct)
                     if let pace {
                         // Even-pace marker: usage to the right of it is running ahead of the clock.

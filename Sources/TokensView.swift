@@ -6,7 +6,7 @@ extension TokenMetric {
     func color(_ t: Theme) -> Color {
         switch self {
         case .input: return t.blue
-        case .output: return t.purple
+        case .output: return t.cyan
         case .cacheWrite: return t.orange
         case .cacheRead: return t.teal
         }
@@ -84,8 +84,7 @@ struct TokensView: View {
     private func chart(_ s: TokenSummary) -> some View {
         Chart(s.buckets) { b in
             BarMark(x: .value("Time", b.start, unit: range.unit), y: .value("Tokens", b.value))
-                .foregroundStyle(LinearGradient(colors: [metric.color(t).opacity(0.55), metric.color(t)],
-                                                startPoint: .bottom, endPoint: .top))
+                .foregroundStyle(metric.color(t))
                 .cornerRadius(2)
                 .opacity(hovered == nil || hovered == b.start ? 1 : 0.4)
         }
@@ -173,7 +172,7 @@ struct ModelList: View {
                     GeometryReader { g in
                         ZStack(alignment: .leading) {
                             Capsule().fill(t.track)
-                            Capsule().fill(LinearGradient(colors: [color.opacity(0.6), color], startPoint: .leading, endPoint: .trailing))
+                            Capsule().fill(color)
                                 .frame(width: max(4, g.size.width * Double(r.value) / Double(total)))
                         }
                     }
