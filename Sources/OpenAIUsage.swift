@@ -1,6 +1,7 @@
-// Live ChatGPT plan limits: the endpoint Codex's /status calls, authenticated with the access
-// token Codex CLI ($CODEX_HOME/auth.json) or OpenCode (~/.local/share/opencode/auth.json) stored
-// for the ChatGPT login. Strictly read-only: refresh tokens are single-use, so refreshing here
+// ChatGPT plan limits and account usage: the endpoints Codex's /status and /usage call (live
+// limits, past windows, daily tokens), authenticated with the access token Codex CLI
+// ($CODEX_HOME/auth.json) or OpenCode (~/.local/share/opencode/auth.json) stored for the ChatGPT
+// login. Strictly read-only: refresh tokens are single-use, so refreshing here
 // would log those tools out. When both tokens have expired the panel falls back to the last
 // snapshot in Codex's logs until one of them refreshes its token on its next run.
 import Foundation
@@ -55,8 +56,9 @@ private func jwtExpiry(_ jwt: String) -> Date? {
     return Date(timeIntervalSince1970: exp)
 }
 
-func fetchCodexLimits(_ auth: CodexAuth) async throws -> CodexLimits {
-    var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
+/// GET chatgpt.com/backend-api/wham/<path> with the ChatGPT login, as Codex sends it.
+private func chatGPTGet(_ path: String, _ auth: CodexAuth) async throws -> [String: Any] {
+    var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/" + path)!)
     req.timeoutInterval = 10
     req.setValue("Bearer \(auth.token)", forHTTPHeaderField: "Authorization")
     if let a = auth.account { req.setValue(a, forHTTPHeaderField: "ChatGPT-Account-ID") }
@@ -69,7 +71,11 @@ func fetchCodexLimits(_ auth: CodexAuth) async throws -> CodexLimits {
                               message: nil)
     }
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw FetchError.badJSON }
-    return parseCodexUsage(json)
+    return json
+}
+
+func fetchCodexLimits(_ auth: CodexAuth) async throws -> CodexLimits {
+    parseCodexUsage(try await chatGPTGet("usage", auth))
 }
 
 func parseCodexUsage(_ json: [String: Any], now: Date = Date()) -> CodexLimits {
@@ -107,18 +113,7 @@ struct PlanHistory {
 }
 
 func fetchPlanHistory(_ auth: CodexAuth) async throws -> PlanHistory {
-    var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage/plan_limit_history?days=30")!)
-    req.timeoutInterval = 10
-    req.setValue("Bearer \(auth.token)", forHTTPHeaderField: "Authorization")
-    if let a = auth.account { req.setValue(a, forHTTPHeaderField: "ChatGPT-Account-ID") }
-    req.setValue("ClaudeUsageBar/0.3", forHTTPHeaderField: "User-Agent")
-    let (data, resp) = try await URLSession.shared.data(for: req)
-    if let code = (resp as? HTTPURLResponse)?.statusCode, code != 200 {
-        if code == 401 { throw CodexAuthError.expired }
-        throw FetchError.http(code, retryAfter: nil, message: nil)
-    }
-    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw FetchError.badJSON }
-    return parsePlanHistory(json)
+    parsePlanHistory(try await chatGPTGet("usage/plan_limit_history?days=30", auth))
 }
 
 /// Usage comes in basis points (1971.5 = 19.715% of the window's limit).
@@ -136,4 +131,67 @@ func parsePlanHistory(_ json: [String: Any]) -> PlanHistory {
                           byModel: byModel.sorted { $0.1 > $1.1 }.map { (name: $0.0, value: $0.1) })
     }
     return PlanHistory(asOf: isoDate(json["data_as_of"]), periods: periods.sorted { $0.start > $1.start })
+}
+
+// MARK: - Account activity
+
+/// Token totals across every Codex surface, the overview in Codex's /usage.
+struct AccountActivity {
+    /// The day the server last aggregated; today is missing until it does.
+    let asOf: Date?
+    let lifetime: Double
+    let peakDay: Double
+    let currentStreak: Int
+    let longestStreak: Int
+    let chats: Int?
+    /// The reasoning effort used most, with its share of turns (0-100).
+    let effort: (name: String, share: Double)?
+    /// Tokens per local calendar day, days without usage left out.
+    let daily: [Date: Double]
+    /// Each day's usage per model. The server sends it relative to the busiest day, so only
+    /// the shares mean anything.
+    let modelDays: [Date: [String: Double]]
+}
+
+func fetchAccountActivity(_ auth: CodexAuth) async throws -> AccountActivity? {
+    async let profile = chatGPTGet("profiles/me", auth)
+    // Optional: without it the card just has no model split.
+    async let breakdown = try? chatGPTGet("usage/daily-token-usage-breakdown", auth)
+    return parseAccountActivity(try await profile, breakdown: await breakdown)
+}
+
+/// profiles/me: {"stats": {"lifetime_tokens", "daily_usage_buckets": [{"start_date", "tokens"}], ...},
+/// "metadata": {"stats_as_of"}}. The breakdown: {"data": [{"date", "models": [{"model", "credits"}]}]}.
+func parseAccountActivity(_ json: [String: Any], breakdown: [String: Any]?) -> AccountActivity? {
+    guard let s = json["stats"] as? [String: Any], let lifetime = s["lifetime_tokens"] as? Double else { return nil }
+    var daily: [Date: Double] = [:]
+    for b in s["daily_usage_buckets"] as? [[String: Any]] ?? [] {
+        if let d = calendarDay(b["start_date"]), let n = b["tokens"] as? Double { daily[d, default: 0] += n }
+    }
+    var modelDays: [Date: [String: Double]] = [:]
+    for day in breakdown?["data"] as? [[String: Any]] ?? [] {
+        guard let d = calendarDay(day["date"]) else { continue }
+        for m in day["models"] as? [[String: Any]] ?? [] {
+            // One row per model and speed; the speeds are summed.
+            guard let id = m["model"] as? String, let v = m["credits"] as? Double, v > 0 else { continue }
+            modelDays[d, default: [:]][modelName(id), default: 0] += v
+        }
+    }
+    let effort = (s["most_used_reasoning_effort"] as? String).map {
+        (name: $0, share: s["most_used_reasoning_effort_percentage"] as? Double ?? 0)
+    }
+    return AccountActivity(
+        asOf: calendarDay((json["metadata"] as? [String: Any])?["stats_as_of"]),
+        lifetime: lifetime, peakDay: s["peak_daily_tokens"] as? Double ?? 0,
+        currentStreak: s["current_streak_days"] as? Int ?? 0, longestStreak: s["longest_streak_days"] as? Int ?? 0,
+        chats: s["total_threads"] as? Int, effort: effort, daily: daily, modelDays: modelDays)
+}
+
+/// "2026-09-25" as the start of that day here, so it lines up with the chart's day buckets.
+private func calendarDay(_ any: Any?) -> Date? {
+    guard let s = any as? String else { return nil }
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "yyyy-MM-dd"
+    return f.date(from: s)
 }

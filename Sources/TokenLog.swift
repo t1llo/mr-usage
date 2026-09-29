@@ -119,6 +119,8 @@ final class TokenStore: ObservableObject {
     @Published private(set) var liveError: String?
     /// Past windows of the ChatGPT plan, from the endpoint behind Codex's /usage.
     @Published private(set) var planHistory: PlanHistory?
+    /// Lifetime and daily tokens across every Codex surface, the overview in Codex's /usage.
+    @Published private(set) var activity: AccountActivity?
     private var nextHistoryAt = Date.distantPast
     private var liveInterval: TimeInterval = 120
     private var nextLiveAt = Date.distantPast
@@ -170,11 +172,14 @@ final class TokenStore: ObservableObject {
             defer { fetchingLive = false }
             do {
                 guard let auth = try await Task.detached(operation: readCodexAuth).value else {
-                    liveLimits = nil; liveError = nil; planHistory = nil; return
+                    liveLimits = nil; liveError = nil; planHistory = nil; activity = nil; return
                 }
-                // Aggregated daily on the server, so every ten minutes is plenty.
-                if Date() >= nextHistoryAt, let h = try? await fetchPlanHistory(auth) {
-                    planHistory = h.periods.isEmpty ? nil : h
+                // Both are aggregated daily on the server, so every ten minutes is plenty.
+                if Date() >= nextHistoryAt {
+                    async let h = try? fetchPlanHistory(auth)
+                    async let a = try? fetchAccountActivity(auth)
+                    if let h = await h { planHistory = h.periods.isEmpty ? nil : h }
+                    if let a = await a { activity = a }
                     nextHistoryAt = Date().addingTimeInterval(600)
                 }
                 let live = try await fetchCodexLimits(auth)

@@ -38,12 +38,20 @@ Pick **OpenAI** in the dropdown next to the title. Nothing to configure either:
   is recomputed from the token counts.
 
 Token counts only exist once a tool has made a request: Codex writes its session log after the
-first message, so a fresh install shows no token counts until then. Above them, the OpenAI Tokens
-tab shows **Plan usage**: the plan's recent weekly windows with the share of each used and the
-split by model, from the same endpoint as Codex's `/usage`
-(`wham/usage/plan_limit_history`). That covers every surface (CLI, IDE, cloud, OpenCode) but
-is aggregated daily by OpenAI, so the current window can lag the live limit by up to a day. Codex logs compressed to `.jsonl.zst` (an experimental Codex setting)
-are skipped.
+first message, so a fresh install shows no token counts until then. With a ChatGPT login the
+OpenAI Tokens tab also has the account-wide numbers Codex's `/usage` shows, which cover every
+surface (CLI, IDE, app, cloud, OpenCode) on every machine:
+
+- **Overview**: tokens per day over 7 or 30 days (daily or cumulative), lifetime tokens, the peak
+  day, the current and longest daily streak, the number of chats, and the split by model, from
+  `wham/profiles/me` and `wham/usage/daily-token-usage-breakdown`.
+- **Plan**: the plan's recent weekly windows with the share of each used and the split by model,
+  from `wham/usage/plan_limit_history`.
+- **This Mac**: the token counts and API cost from the logs above.
+
+OpenAI aggregates the account numbers daily, so today is missing and the current window can lag
+the live limit by up to a day. Codex logs compressed to `.jsonl.zst` (an experimental Codex
+setting) are skipped.
 
 ## Build and run
 
