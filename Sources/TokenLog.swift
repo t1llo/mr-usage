@@ -1,11 +1,22 @@
-// Token counts from Claude Code's own session transcripts (~/.claude/projects/**/*.jsonl).
-// The usage endpoint only reports percentages, but every assistant turn in a transcript carries
-// the API's `usage` block, so summing those gives input and output tokens for this Mac.
+// Token counts from the local logs of each coding tool: Claude Code's transcripts
+// (~/.claude/projects/**/*.jsonl) here, Codex in CodexLog.swift, OpenCode in OpenCodeLog.swift.
+// The usage endpoints only report percentages, but every model call in those logs carries the
+// API's token counts, so summing them gives input and output tokens for this Mac.
 import Foundation
+
+enum Provider: String, CaseIterable, Identifiable {
+    case claude = "Claude", openai = "OpenAI"
+    var id: String { rawValue }
+}
+
+enum Source: String { case claudeCode = "Claude Code", codex = "Codex", opencode = "OpenCode" }
 
 struct TokenRecord {
     let date: Date
     let model: String
+    let provider: Provider
+    let source: Source
+    /// Uncached input. Cache writes and reads are counted separately, for every provider.
     let input: Int
     let output: Int
     let cacheWrite: Int
@@ -86,7 +97,7 @@ actor TokenScanner {
         let write1h = min(cacheWrite, (u["cache_creation"] as? [String: Any])?["ephemeral_1h_input_tokens"] as? Int ?? 0)
         let cost = apiCost(model: model, input: input, output: output, cacheWrite5m: cacheWrite - write1h,
                            cacheWrite1h: write1h, cacheRead: cacheRead, fast: u["speed"] as? String == "fast")
-        let r = TokenRecord(date: date, model: model, input: input, output: output,
+        let r = TokenRecord(date: date, model: model, provider: .claude, source: .claudeCode, input: input, output: output,
                             cacheWrite: cacheWrite, cacheRead: cacheRead, cost: cost)
         if let old = records[key], old.output >= r.output { return }
         records[key] = r
@@ -96,18 +107,87 @@ actor TokenScanner {
 @MainActor
 final class TokenStore: ObservableObject {
     @Published private(set) var records: [TokenRecord] = []
+    /// The live ChatGPT limits when the fetch works, else the newest logged snapshot.
+    var codexLimits: CodexLimits? {
+        guard let live = liveLimits else { return loggedLimits }
+        return (loggedLimits?.asOf ?? .distantPast) > live.asOf ? loggedLimits : live
+    }
+    @Published private(set) var liveLimits: CodexLimits?
+    @Published private(set) var loggedLimits: CodexLimits?
+    /// Why the live fetch is not working, shown under the limits. Nil when it works or when
+    /// Codex is not signed in with ChatGPT at all.
+    @Published private(set) var liveError: String?
+    private var liveInterval: TimeInterval = 120
+    private var nextLiveAt = Date.distantPast
+    private var fetchingLive = false
+    /// Tools that have logs on this Mac, even if nothing falls inside the chart range.
+    @Published private(set) var sources: Set<Source> = []
     @Published private(set) var loaded = false
     private var scanning = false
-    private let scanner = TokenScanner()
+    private let claude = TokenScanner()
+    private let codex = CodexScanner()
+    private let opencode = OpenCodeReader()
+
+    init() {
+        refresh()
+        // Codex limits drive the menu bar title when OpenAI is selected, so keep reading its
+        // logs while the panel is closed. Each pass only parses bytes added since the last one.
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
 
     func refresh() {
         guard !scanning else { return }
         scanning = true
         Task {
-            records = await scanner.scan()
+            async let a = claude.scan()
+            async let b = codex.scan()
+            async let c = opencode.scan()
+            let (cl, cx, oc) = await (a, b, c)
+            records = cl + cx.records + oc.records
+            loggedLimits = cx.limits
+            var s = Set<Source>()
+            if !cl.isEmpty { s.insert(.claudeCode) }
+            if cx.found { s.insert(.codex) }
+            if oc.found { s.insert(.opencode) }
+            sources = s
             loaded = true
             scanning = false
         }
+        fetchLive()
+    }
+
+    /// Every two minutes at most, doubling up to ten after a 429 or 5xx, like the Claude poll.
+    private func fetchLive() {
+        guard !fetchingLive, Date() >= nextLiveAt else { return }
+        fetchingLive = true
+        nextLiveAt = Date().addingTimeInterval(liveInterval)
+        Task {
+            defer { fetchingLive = false }
+            do {
+                guard let auth = try await Task.detached(operation: readCodexAuth).value else {
+                    liveLimits = nil; liveError = nil; return
+                }
+                let live = try await fetchCodexLimits(auth)
+                liveLimits = live.usage.limits.isEmpty ? nil : live
+                liveError = live.usage.limits.isEmpty ? "no limits for this account" : nil
+            } catch {
+                liveError = error.localizedDescription
+                if let fe = error as? FetchError, fe.isTransient {
+                    liveInterval = min(liveInterval * 2, 600)
+                    nextLiveAt = Date().addingTimeInterval(max(liveInterval, fe.retryAfter ?? 0))
+                }
+            }
+        }
+    }
+}
+
+extension TokenStore {
+    /// Menu bar text for OpenAI: the Codex windows' percentages, or "OpenAI" without a snapshot.
+    func menuTitle(now: Date = Date()) -> String {
+        guard let u = codexLimits?.current(now: now), !u.limits.isEmpty else { return "OpenAI" }
+        return u.limits.prefix(2).map { "\(Int($0.pct))%" }.joined(separator: " · ")
     }
 }
 
@@ -161,27 +241,38 @@ struct TokenSummary {
     var unpriced: Set<String> = []
 }
 
-func summarize(_ records: [TokenRecord], range: TokenRange, metric: TokenMetric, now: Date = Date()) -> TokenSummary {
+func summarize(_ records: [TokenRecord], provider: Provider, range: TokenRange, metric: TokenMetric,
+               now: Date = Date()) -> TokenSummary {
     let cal = Calendar.current
     let last = cal.dateInterval(of: range.unit, for: now)!.start
     let starts = (0..<range.count).map { cal.date(byAdding: range.unit, value: $0 - range.count + 1, to: last)! }
     var perBucket: [Date: Double] = [:]
     var perModel: [String: Double] = [:]
     var s = TokenSummary()
-    for r in records where r.date >= starts[0] {
+    // Only tag the tool when there is more than one, e.g. "GPT-5.5 · OpenCode".
+    let inRange = records.filter { $0.provider == provider && $0.date >= starts[0] }
+    let tagged = Set(inRange.map(\.source)).count > 1
+    for r in inRange {
         for m in TokenMetric.allCases { s.totals[m, default: 0] += m.value(r) }
         if r.cost == nil { s.unpriced.insert(modelName(r.model)) }
         let v = metric.value(r)
         perBucket[cal.dateInterval(of: range.unit, for: r.date)!.start, default: 0] += v
-        perModel[modelName(r.model), default: 0] += v
+        perModel[modelName(r.model) + (tagged ? " · \(r.source.rawValue)" : ""), default: 0] += v
     }
     s.buckets = starts.map { TokenBucket(start: $0, value: perBucket[$0] ?? 0) }
     s.byModel = perModel.filter { $0.value > 0 }.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
     return s
 }
 
-/// "claude-opus-5-5" -> "Opus 5.5", "claude-haiku-4-5-20251001" -> "Haiku 4.5".
+/// "claude-opus-5-5" -> "Opus 5.5", "claude-haiku-4-5-20251001" -> "Haiku 4.5",
+/// "gpt-6-sol" -> "GPT-6 Sol", "gpt-5.3-codex" -> "GPT-5.3 Codex".
 func modelName(_ id: String) -> String {
+    if id.hasPrefix("gpt-") {
+        let parts = id.dropFirst(4).split(separator: "-").map(String.init)
+        guard let version = parts.first else { return id }
+        return (["GPT-" + version] + parts.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() })
+            .joined(separator: " ")
+    }
     var parts = id.split(separator: "-").map(String.init)
     if parts.first == "claude" { parts.removeFirst() }
     if let l = parts.last, l.count == 8, Int(l) != nil { parts.removeLast() }

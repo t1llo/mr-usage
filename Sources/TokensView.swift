@@ -21,11 +21,13 @@ extension TokenMetric {
         case .cacheRead: return "arrow.triangle.2.circlepath.circle.fill"
         }
     }
-    var help: String {
+    func help(_ p: Provider) -> String {
         switch self {
-        case .cost: return "What these tokens would cost at Anthropic API list prices, cache and fast mode included"
+        case .cost: return p == .claude
+            ? "What these tokens would cost at Anthropic API list prices, cache and fast mode included"
+            : "What these tokens would cost at OpenAI API list prices (Standard tier), cache included"
         case .input: return "Uncached input tokens sent to the model"
-        case .output: return "Tokens the model generated, thinking included"
+        case .output: return "Tokens the model generated, reasoning included"
         case .cacheWrite: return "Input tokens written to the prompt cache"
         case .cacheRead: return "Input tokens served from the prompt cache"
         }
@@ -34,13 +36,14 @@ extension TokenMetric {
 
 struct TokensView: View {
     @ObservedObject var tokens: TokenStore
+    let provider: Provider
     @AppStorage("tokenRange") private var range: TokenRange = .week
     @AppStorage("tokenMetric") private var metric: TokenMetric = .cost
     @State private var hovered: Date?
     @Environment(\.theme) private var t
 
     var body: some View {
-        let s = summarize(tokens.records, range: range, metric: metric)
+        let s = summarize(tokens.records, provider: provider, range: range, metric: metric)
         VStack(alignment: .leading, spacing: 10) {
             Card {
                 VStack(alignment: .leading, spacing: 10) {
@@ -55,10 +58,10 @@ struct TokensView: View {
                 }
             }
             MetricTile(metric: .cost, value: s.totals[.cost] ?? 0, selected: metric == .cost,
-                       caption: "if billed at API prices") { metric = .cost }
+                       caption: "if billed at API prices", help: metric.help(provider)) { metric = .cost }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(TokenMetric.tokenKinds) { m in
-                    MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == metric) { metric = m }
+                    MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == metric, help: m.help(provider)) { metric = m }
                 }
             }
             if !s.byModel.isEmpty { Card { ModelList(rows: s.byModel, metric: metric) } }
@@ -67,10 +70,18 @@ struct TokensView: View {
                     .font(.caption2).foregroundStyle(t.warn)
                     .frame(maxWidth: .infinity)
             }
-            Text("From Claude Code sessions on this Mac")
+            Text(footnote)
                 .font(.caption2).foregroundStyle(t.muted)
                 .frame(maxWidth: .infinity)
         }
+    }
+
+    /// Which tools the numbers come from, or where they would come from.
+    private var footnote: String {
+        let tools: [Source] = provider == .claude ? [.claudeCode, .opencode] : [.codex, .opencode]
+        let found = tools.filter { tokens.sources.contains($0) }
+        let names = (found.isEmpty ? tools : found).map(\.rawValue).joined(separator: " and ")
+        return found.isEmpty ? "No \(names) logs on this Mac yet" : "From \(names) sessions on this Mac"
     }
 
     /// Hovered bucket's value, or the range total for the selected metric.
@@ -134,6 +145,7 @@ struct MetricTile: View {
     let value: Double
     let selected: Bool
     var caption: String?
+    let help: String
     let action: () -> Void
     @Environment(\.theme) private var t
 
@@ -161,7 +173,7 @@ struct MetricTile: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(metric.help)
+        .help(help)
     }
 }
 

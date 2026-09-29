@@ -1,5 +1,6 @@
-// The panel that drops down from the menu bar. Two tabs: Limits (session as a ring hero, other
-// limits as bars, each with an even-pace marker) and Tokens (see TokensView.swift).
+// The panel that drops down from the menu bar. A provider picker (Claude or OpenAI) in the header,
+// then two tabs: Limits (session as a ring hero, other limits as bars, each with an even-pace
+// marker) and Tokens (see TokensView.swift).
 import ServiceManagement
 import SwiftUI
 
@@ -63,11 +64,36 @@ extension Limit {
 
 enum PanelTab: String, CaseIterable { case limits = "Limits", tokens = "Tokens" }
 
+extension Provider {
+    var icon: String { self == .claude ? "sparkle" : "hexagon.fill" }
+    var detail: String { self == .claude ? "Claude Code, OpenCode" : "Codex CLI, OpenCode" }
+}
+
+/// "plus" -> "Plus", "prolite" -> "Pro Lite", "self_serve_business_usage_based" -> "Business".
+func planName(_ plan: String) -> String {
+    switch plan {
+    case "prolite": return "Pro Lite"
+    case "promax": return "Pro Max"
+    case "edu_plus": return "Edu Plus"
+    case "edu_pro": return "Edu Pro"
+    case let p where p.contains("business"): return "Business"
+    case let p where p.hasPrefix("ent"): return "Enterprise"
+    default: return plan.prefix(1).uppercased() + plan.dropFirst()
+    }
+}
+
+/// "3:40pm" today, otherwise "Mon 3:40pm".
+func dayClock(_ d: Date) -> String {
+    Calendar.current.isDateInToday(d) ? clock(d) : resetClock(d)
+}
+
 struct UsagePanel: View {
     @ObservedObject var store: Store
     @ObservedObject var tokens: TokenStore
     @AppStorage("theme") private var themeID = Theme.tokyoNight.id
     @AppStorage("tab") private var tab: PanelTab = .limits
+    @AppStorage("provider") private var provider: Provider = .claude
+    @State private var picking = false
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
 
     private var t: Theme { Theme.named(themeID) }
@@ -80,13 +106,18 @@ struct UsagePanel: View {
                 switch tab {
                 case .limits:
                     // Re-render every 30 s so countdowns and pace markers stay current while open.
-                    TimelineView(.periodic(from: .now, by: 30)) { ctx in limits(now: ctx.date) }
+                    TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                        switch provider {
+                        case .claude: claudeLimits(now: ctx.date)
+                        case .openai: openAILimits(now: ctx.date)
+                        }
+                    }
                 case .tokens:
-                    TokensView(tokens: tokens)
+                    TokensView(tokens: tokens, provider: provider)
                 }
             }
             .transition(.opacity)
-            if store.usage != nil, let e = store.lastError, !store.inFlight {
+            if provider == .claude, store.usage != nil, let e = store.lastError, !store.inFlight {
                 ErrorBanner(text: "Couldn't refresh: \(e). Retrying at \(clock(store.nextFetchAt)).")
             }
             footer
@@ -98,6 +129,7 @@ struct UsagePanel: View {
         .environment(\.theme, t)
         .preferredColorScheme(t.isDark ? .dark : .light)
         .animation(.easeOut(duration: 0.2), value: tab)
+        .animation(.easeOut(duration: 0.2), value: provider)
         .onAppear { store.tick(); tokens.refresh() }
         .onChange(of: tab) { if $0 == .tokens { tokens.refresh() } }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
@@ -109,10 +141,7 @@ struct UsagePanel: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkle")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(t.accent)
-            Text("Claude usage").font(.system(size: 15, weight: .semibold, design: .rounded))
+            providerPicker
             Spacer()
             Text(subtitle).font(.caption).foregroundStyle(t.muted).monospacedDigit()
             Menu {
@@ -143,40 +172,120 @@ struct UsagePanel: View {
         .padding(.horizontal, 2)
     }
 
-    private var subtitle: String {
-        if store.inFlight { return "Refreshing…" }
-        if let at = store.lastGoodAt { return clock(at) }
-        return ""
+    /// Provider name with a chevron; opens a themed list rather than a system menu, so it
+    /// matches the rest of the panel.
+    private var providerPicker: some View {
+        Button { picking.toggle() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: provider.icon)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(t.accent)
+                Text("\(provider.rawValue) usage").font(.system(size: 15, weight: .semibold, design: .rounded))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(t.muted)
+                    .rotationEffect(.degrees(picking ? 180 : 0))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Switch provider")
+        .popover(isPresented: $picking, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Provider.allCases) { p in
+                    Button { provider = p; picking = false } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: p.icon).foregroundStyle(t.accent).frame(width: 16)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(p.rawValue).font(.system(size: 13, weight: .semibold))
+                                Text(p.detail).font(.caption).foregroundStyle(t.muted)
+                            }
+                            Spacer(minLength: 12)
+                            if p == provider { Image(systemName: "checkmark").foregroundStyle(t.accent) }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(p == provider ? t.accent.opacity(0.12) : .clear))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+            .frame(width: 230)
+            .foregroundStyle(t.text)
+            .background(t.card)
+            .environment(\.theme, t)
+            .preferredColorScheme(t.isDark ? .dark : .light)
+        }
     }
 
-    @ViewBuilder private func limits(now: Date) -> some View {
+    private var subtitle: String {
+        switch provider {
+        case .claude:
+            if store.inFlight { return "Refreshing…" }
+            return store.lastGoodAt.map(clock) ?? ""
+        case .openai:
+            return tokens.codexLimits.map { $0.live ? clock($0.asOf) : "as of \(dayClock($0.asOf))" } ?? ""
+        }
+    }
+
+    @ViewBuilder private func claudeLimits(now: Date) -> some View {
         if let u = store.usage {
+            limitCards(u, now: now)
+        } else {
+            EmptyState(loading: store.inFlight, text: store.status)
+        }
+    }
+
+    @ViewBuilder private func openAILimits(now: Date) -> some View {
+        if let cx = tokens.codexLimits {
             VStack(alignment: .leading, spacing: 10) {
-                if let session = u.limits.first { SessionCard(limit: session, now: now) }
-                let weekly = Array(u.limits.dropFirst())
-                if !weekly.isEmpty {
-                    Card {
-                        VStack(alignment: .leading, spacing: 14) {
-                            ForEach(weekly) { l in
-                                BarRow(icon: icon(for: l.id), label: l.label, pct: l.pct,
-                                       value: "\(Int(l.pct))%",
-                                       caption: "Resets \(countdown(to: l.resetsAt, now: now)) · \(resetClock(l.resetsAt))",
-                                       pace: l.pace(now: now))
-                            }
+                limitCards(cx.current(now: now), now: now)
+                Text([cx.plan.map { "ChatGPT " + planName($0) }, cx.live ? "live" : "from Codex logs, \(dayClock(cx.asOf))"]
+                        .compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption2).foregroundStyle(t.muted)
+                    .frame(maxWidth: .infinity)
+                    .help(cx.live ? "Fetched from ChatGPT with Codex's login"
+                          : "Codex logs your plan's limits with every request, so use elsewhere (OpenCode, ChatGPT) shows up after your next Codex request.")
+                if !cx.live, let e = tokens.liveError { ErrorBanner(text: "Live limits unavailable: \(e).") }
+            }
+        } else {
+            EmptyState(loading: !tokens.loaded, text: !tokens.loaded ? "Reading Codex logs…"
+                : tokens.sources.contains(.codex)
+                    ? "Codex hasn't logged any limits yet. They show up after your next Codex request."
+                    : tokens.sources.contains(.opencode)
+                        ? "OpenCode doesn't record ChatGPT limits. Run Codex CLI once to see them; token usage is in the Tokens tab."
+                        : "No Codex CLI logs in ~/.codex. Sign in to Codex with your ChatGPT account and run it once.")
+        }
+    }
+
+    private func limitCards(_ u: Usage, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let session = u.limits.first { SessionCard(limit: session, now: now) }
+            let weekly = Array(u.limits.dropFirst())
+            if !weekly.isEmpty {
+                Card {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(weekly) { l in
+                            BarRow(icon: icon(for: l.id), label: l.label, pct: l.pct,
+                                   value: "\(Int(l.pct))%",
+                                   caption: l.resetsAt == nil ? "Not started"
+                                       : "Resets \(countdown(to: l.resetsAt, now: now)) · \(resetClock(l.resetsAt))",
+                                   pace: l.pace(now: now))
                         }
                     }
                 }
-                if let c = u.credits {
-                    let pct = (c.limitCents ?? 0) > 0 ? c.usedCents / c.limitCents! * 100 : 0
-                    Card {
-                        BarRow(icon: "creditcard.fill", label: "Extra usage", pct: pct,
-                               value: "\(money(c.usedCents)) / \(c.limitCents.map(money) ?? "no limit")",
-                               caption: "Resets \(firstOfNextMonth())", pace: nil)
-                    }
+            }
+            if let c = u.credits {
+                let pct = (c.limitCents ?? 0) > 0 ? c.usedCents / c.limitCents! * 100 : 0
+                Card {
+                    BarRow(icon: "creditcard.fill", label: "Extra usage", pct: pct,
+                           value: "\(money(c.usedCents)) / \(c.limitCents.map(money) ?? "no limit")",
+                           caption: "Resets \(firstOfNextMonth())", pace: nil)
                 }
             }
-        } else {
-            EmptyState(loading: store.inFlight, text: store.status)
         }
     }
 

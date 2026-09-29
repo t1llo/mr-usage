@@ -1,7 +1,8 @@
 # ClaudeUsageBar
 
-A very small macOS menu bar app that shows what `/usage` shows in Claude Code:
-session limit, weekly limit, and extra usage credits.
+A very small macOS menu bar app that shows what `/usage` shows in Claude Code (session limit,
+weekly limit, extra usage credits) and the same for a ChatGPT plan used through Codex CLI, plus
+token counts and their API-price equivalent for Claude Code, Codex and OpenCode.
 
 ## How it gets the data
 
@@ -15,6 +16,29 @@ no password prompt. (The earlier version asked for the Keychain password again e
 Claude Code refreshed its token, because each refresh rewrites the item and resets its access
 list. That is also why signing the app, with `make-cert.sh` or an Apple Developer ID, could not
 fix it.) `make-cert.sh` is no longer needed.
+
+### OpenAI (Codex CLI and OpenCode)
+
+Pick **OpenAI** in the dropdown next to the title. Nothing to configure either:
+
+- **Limits** come live from the endpoint Codex's `/status` uses (`chatgpt.com/backend-api/wham/usage`),
+  with the access token `codex login` stored in `~/.codex/auth.json` (or `$CODEX_HOME`). The app
+  never refreshes that token: refresh tokens are single-use, so doing it here would sign Codex
+  out. When the token has expired, or Codex keeps its login in the Keychain
+  (`cli_auth_credentials_store = "keyring"`), the panel shows the last snapshot Codex wrote to its
+  session logs instead, marked with its time. A window whose reset time has passed shows as empty.
+- **Tokens** come from Codex's session logs (`~/.codex/sessions/**/rollout-*.jsonl`, one usage
+  record per API response; older logs are counted from their running totals) and from OpenCode's
+  database (`~/.local/share/opencode/opencode.db`). OpenCode messages from the `openai` provider
+  (API key or ChatGPT login) count under OpenAI, those from `anthropic` under Claude. Forked
+  sessions are counted once. When both tools have data, the model list tags each row with the tool.
+- **API cost** uses OpenAI's Standard-tier list prices for prompts under 272K tokens (as of
+  2026-09-29), in `Sources/Pricing.swift`. OpenCode logs a ChatGPT login's cost as 0, so the cost
+  is recomputed from the token counts.
+
+OpenCode does not record ChatGPT plan limits, so with OpenCode alone the Limits tab stays empty
+until Codex has run once. Codex logs compressed to `.jsonl.zst` (an experimental Codex setting)
+are skipped.
 
 ## Build and run
 
@@ -30,16 +54,16 @@ Click the percentages in the menu bar to open the panel. It has two tabs:
   be at an even pace, and says whether you are ahead of it, on it, or under it.
 - **Tokens**: input, output, cache-write and cache-read tokens over the last 24 hours, 7 days or
   30 days, as a bar chart plus totals and a per-model split. Click a total to chart it. The
-  counts come from Claude Code's transcripts in `~/.claude/projects`, so they cover Claude Code
-  on this Mac only (not claude.ai or other machines). Responses that appear on several lines or
+  counts come from Claude Code's transcripts in `~/.claude/projects` (plus OpenCode, see above),
+  so they cover this Mac only (not claude.ai or other machines). Responses that appear on several lines or
   in several files are counted once.
 - **API cost**: what the same usage would cost on the Anthropic API at list prices, priced per
   response from its model, cache writes (5-minute at 1.25x input, 1-hour at 2x), cache reads and
   fast mode. It is the default chart. Prices live in `Sources/Pricing.swift` (as of 2026-09-25);
   a model missing from that table is left out of the cost and named under the chart.
 
-The palette button in the header switches between Tokyo Night (default), Catppuccin Mocha and
-Catppuccin Latte. Refreshes every minute and when you open the panel.
+The menu bar shows the selected provider's percentages. The palette button in the header
+switches between Tokyo Night (default), Catppuccin Mocha and Catppuccin Latte. Refreshes every minute and when you open the panel.
 
 If a refresh fails, the last good numbers stay on screen and a status line says why and
 when the next attempt is. On HTTP 429 (rate limited) or a server error the polling interval
@@ -58,8 +82,11 @@ at its current path, so keep `build/ClaudeUsageBar.app` where it is (or move it 
 - `Sources/main.swift`: app entry, SwiftUI `MenuBarExtra`
 - `Sources/Views.swift`: the panel and the Limits tab
 - `Sources/TokensView.swift`: the Tokens tab
-- `Sources/TokenLog.swift`: incremental transcript reader and token aggregation
-- `Sources/Pricing.swift`: API price table and per-response cost
+- `Sources/TokenLog.swift`: Claude Code transcript reader, the token store, aggregation
+- `Sources/CodexLog.swift`: Codex session log reader (tokens and logged limits)
+- `Sources/OpenCodeLog.swift`: OpenCode database reader
+- `Sources/OpenAIUsage.swift`: live ChatGPT plan limits with Codex's login
+- `Sources/Pricing.swift`: Anthropic and OpenAI price tables and per-response cost
 - `Sources/Theme.swift`: color themes and the pill segmented control
 - `Sources/Store.swift`: polling schedule and backoff
 - `Sources/Usage.swift`: token read, API call, parsing, formatting
