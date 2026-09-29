@@ -9,12 +9,12 @@ It reuses your existing Claude Code login. `claude login` stores an OAuth token 
 macOS Keychain (item "Claude Code-credentials"). The app reads that token and calls the
 same usage endpoint Claude Code calls for `/usage`. There is nothing to configure.
 
-The first launch shows a macOS Keychain prompt asking to allow ClaudeUsageBar to read
-that item. Choose "Always Allow".
-
-To make that approval survive rebuilds, run `./make-cert.sh` once first. It creates a
-self-signed code-signing certificate so every build has the same identity. Without it the
-app is signed ad-hoc, which changes identity on every build, and the prompt comes back.
+It reads the item through `/usr/bin/security` rather than the Keychain API. Claude Code
+writes the item with that same tool, so `security` is already allowed to read it and there is
+no password prompt. (The earlier version asked for the Keychain password again every time
+Claude Code refreshed its token, because each refresh rewrites the item and resets its access
+list. That is also why signing the app, with `make-cert.sh` or an Apple Developer ID, could not
+fix it.) `make-cert.sh` is no longer needed.
 
 ## Build and run
 
@@ -23,7 +23,9 @@ app is signed ad-hoc, which changes identity on every build, and the prompt come
 open build/ClaudeUsageBar.app
 ```
 
-Refreshes every minute and when you open the menu. Quit from the menu.
+Click the percentages in the menu bar to open the overview: the five-hour session as a ring
+with a countdown to its reset, then the weekly limits and extra-usage credits as bars. Bars turn
+orange from 75% and red from 90%. Refreshes every minute and when you open the panel.
 
 If a refresh fails, the last good numbers stay on screen and a status line says why and
 when the next attempt is. On HTTP 429 (rate limited) or a server error the polling interval
@@ -39,6 +41,9 @@ at its current path, so keep `build/ClaudeUsageBar.app` where it is (or move it 
 
 ## Layout
 
-- `Sources/main.swift`: the whole app (AppKit + Security, no dependencies)
+- `Sources/main.swift`: app entry, SwiftUI `MenuBarExtra`
+- `Sources/Views.swift`: the overview panel
+- `Sources/Store.swift`: polling schedule and backoff
+- `Sources/Usage.swift`: token read, API call, parsing, formatting
 - `Info.plist`: marks it as a menu-bar-only app (`LSUIElement`)
 - `build.sh`: compiles with `swiftc` into `build/ClaudeUsageBar.app`
