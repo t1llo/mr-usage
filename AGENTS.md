@@ -18,7 +18,7 @@
 
 ## Data and cross-file coupling
 
-- `Sources/main.swift` owns `Store` (Claude limits) and `TokenStore` (all token logs plus OpenAI limits/history), with an explicit top-level `ClaudeUsageBarApp.main()` call rather than `@main`.
+- `Sources/main.swift` creates `Store` (`Sources/Store.swift`, Claude limits) and `TokenStore` (`Sources/TokenLog.swift`, token logs plus OpenAI limits/history), with an explicit top-level `ClaudeUsageBarApp.main()` call rather than `@main`.
 - Data roots: Claude transcripts in `~/.claude/projects`; Codex auth/logs under `$CODEX_HOME` (default `~/.codex`, including `sessions` and `archived_sessions`); OpenCode auth/databases under `$XDG_DATA_HOME/opencode` (default `~/.local/share/opencode`). Counts cover local logs; OpenAI plan history is remote and daily-aggregated.
 - Claude/Codex scanners consume complete JSONL lines incrementally and deduplicate copied/streamed responses; Codex per-response records supersede running totals. OpenCode re-reads its 31-day horizon because rows change or disappear, deduplicating forks by content. Preserve these distinctions when changing readers.
 - `Sources/OpenCodeLog.swift` queries all `opencode*.db` files through SQLite to include WAL data. Its read-write fallback only runs SELECTs but allows missing WAL/SHM files to be recreated.

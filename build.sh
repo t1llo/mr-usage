@@ -11,6 +11,10 @@ STAGING='build/.Mr. Usage.staging.app'
 rm -rf "$STAGING"
 mkdir -p "$STAGING/Contents/MacOS" "$STAGING/Contents/Frameworks" "$STAGING/Contents/Resources"
 cp "$BIN_DIR/ClaudeUsageBar" "$STAGING/Contents/MacOS/ClaudeUsageBar"
+# Remove debug symbols containing local build paths before code signing.
+if [ "${CONFIGURATION:-release}" = release ]; then
+    xcrun strip -S "$STAGING/Contents/MacOS/ClaudeUsageBar"
+fi
 cp Info.plist "$STAGING/Contents/Info.plist"
 SPARKLE='.build/artifacts/sparkle/Sparkle'
 ditto "$SPARKLE/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework" "$STAGING/Contents/Frameworks/Sparkle.framework"

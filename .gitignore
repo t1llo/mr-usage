@@ -5,3 +5,26 @@ build/
 
 # macOS
 .DS_Store
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.p8
+*.key
+*.pem
+*.mobileprovision
+auth.json
+credentials.json
+
+# Local usage data and diagnostics
+leaderboard.json
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+*.jsonl
