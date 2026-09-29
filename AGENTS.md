@@ -2,8 +2,8 @@
 
 ## Build and verification
 
-- Build on macOS with `./build.sh`: Swift Package Manager compiles `Sources/*.swift` targeting macOS 13 with pinned Sparkle 2.10.0, then packages `build/Mr. Usage.app` and signs its nested helpers inside out.
-- Fast verification: `swift build --product ClaudeUsageBar`. Run isolated leaderboard tests with `sh test-leaderboard.sh` when present.
+- Build on macOS with `./scripts/build.sh`: Swift Package Manager compiles `Sources/*.swift` targeting macOS 13 with pinned Sparkle 2.10.0, then packages `build/Mr. Usage.app` and signs its nested helpers inside out.
+- Fast verification: `swift build --product ClaudeUsageBar`. Run isolated leaderboard tests with `sh scripts/test-leaderboard.sh` when present.
 - Launch with `open 'build/Mr. Usage.app'`. Quit the running app before checking a rebuild: `Sources/main.swift` rejects additional instances to prevent duplicate polling.
 - Local builds are ad-hoc signed. Distribution builds use `MR_USAGE_UNIVERSAL=1` and `MR_USAGE_SIGN_IDENTITY`. Credentials and Sparkle private keys stay in Keychain; only public verification keys belong in this repository.
 

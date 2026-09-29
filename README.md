@@ -156,7 +156,7 @@ Requires **Swift 6+** and **macOS 13+**.
 ```sh
 git clone https://github.com/t1llo/mr-usage.git
 cd mr-usage
-./build.sh
+./scripts/build.sh
 open 'build/Mr. Usage.app'
 ```
 
@@ -169,14 +169,14 @@ your own signing identity. Quit a running copy before launching a rebuild.
 
 ```sh
 swift build --product ClaudeUsageBar
-sh test-leaderboard.sh
+sh scripts/test-leaderboard.sh
 ```
 
 Leaderboard tests use synthetic counts and temporary state, not provider logs. To also
 exercise upload, pricing, and removal against a local API instance:
 
 ```sh
-LEADERBOARD_TEST_ORIGIN=http://127.0.0.1:4173 sh test-leaderboard.sh
+LEADERBOARD_TEST_ORIGIN=http://127.0.0.1:4173 sh scripts/test-leaderboard.sh
 ```
 
 ### Source layout
@@ -188,4 +188,6 @@ LEADERBOARD_TEST_ORIGIN=http://127.0.0.1:4173 sh test-leaderboard.sh
 - `Sources/Pricing.swift`: model prices and cost calculations.
 - `Sources/Leaderboard.swift`, `LeaderboardView.swift`: opt-in sharing and settings.
 - `Sources/UpdateService.swift`: Sparkle update controls.
-- `build.sh`, `scripts/sign-app.sh`: app packaging and inside-out signing.
+- `scripts/build.sh`, `scripts/sign-app.sh`: app packaging and inside-out signing.
+- `scripts/test-leaderboard.sh`: isolated sharing tests.
+- `scripts/make-cert.sh`: optional self-signed identity for local development.

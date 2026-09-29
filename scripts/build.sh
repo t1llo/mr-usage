@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds Mr. Usage with its pinned Sparkle updater and packages a standalone app.
 set -eu
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 set -- --configuration "${CONFIGURATION:-release}" --product ClaudeUsageBar --disable-keychain
 if [ "${MR_USAGE_UNIVERSAL:-0}" = 1 ]; then set -- "$@" --arch arm64 --arch x86_64; fi
 swift build "$@"

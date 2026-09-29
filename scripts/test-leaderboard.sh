@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 mkdir -p build
 # Keep assertions enabled. The app entry point is excluded to avoid starting
 # scanners or reading any provider credentials during verification.
