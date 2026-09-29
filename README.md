@@ -23,9 +23,19 @@ fix it.) `make-cert.sh` is no longer needed.
 open build/ClaudeUsageBar.app
 ```
 
-Click the percentages in the menu bar to open the overview: the five-hour session as a ring
-with a countdown to its reset, then the weekly limits and extra-usage credits as bars. Bars turn
-orange from 75% and red from 90%. Refreshes every minute and when you open the panel.
+Click the percentages in the menu bar to open the panel. It has two tabs:
+
+- **Limits**: the five-hour session as a ring with a countdown to its reset, then the weekly
+  limits and extra-usage credits as bars. Each rolling window has a marker for where usage would
+  be at an even pace, and says whether you are ahead of it, on it, or under it.
+- **Tokens**: input, output, cache-write and cache-read tokens over the last 24 hours, 7 days or
+  30 days, as a bar chart plus totals and a per-model split. Click a total to chart it. The
+  counts come from Claude Code's transcripts in `~/.claude/projects`, so they cover Claude Code
+  on this Mac only (not claude.ai or other machines). Responses that appear on several lines or
+  in several files are counted once.
+
+The palette button in the header switches between Tokyo Night (default), Catppuccin Mocha and
+Catppuccin Latte. Refreshes every minute and when you open the panel.
 
 If a refresh fails, the last good numbers stay on screen and a status line says why and
 when the next attempt is. On HTTP 429 (rate limited) or a server error the polling interval
@@ -42,7 +52,10 @@ at its current path, so keep `build/ClaudeUsageBar.app` where it is (or move it 
 ## Layout
 
 - `Sources/main.swift`: app entry, SwiftUI `MenuBarExtra`
-- `Sources/Views.swift`: the overview panel
+- `Sources/Views.swift`: the panel and the Limits tab
+- `Sources/TokensView.swift`: the Tokens tab
+- `Sources/TokenLog.swift`: incremental transcript reader and token aggregation
+- `Sources/Theme.swift`: color themes and the pill segmented control
 - `Sources/Store.swift`: polling schedule and backoff
 - `Sources/Usage.swift`: token read, API call, parsing, formatting
 - `Info.plist`: marks it as a menu-bar-only app (`LSUIElement`)

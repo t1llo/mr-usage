@@ -1,11 +1,7 @@
-// The panel that drops down from the menu bar: session as a ring hero, other limits as bars.
-// Every limit also shows where usage *would* be at an even burn rate, so the panel answers
-// "am I spending faster than the clock?" and not just "how much is left".
+// The panel that drops down from the menu bar. Two tabs: Limits (session as a ring hero, other
+// limits as bars, each with an even-pace marker) and Tokens (see TokensView.swift).
 import ServiceManagement
 import SwiftUI
-
-/// Accent while there is room, orange from 75%, red from 90%.
-func levelColor(_ pct: Double) -> Color { pct >= 90 ? .red : pct >= 75 ? .orange : .accentColor }
 
 // MARK: - Pace
 
@@ -29,12 +25,12 @@ enum Pace {
         case .exhausted: return "exclamationmark.circle.fill"
         }
     }
-    var color: Color {
+    func color(_ t: Theme) -> Color {
         switch self {
-        case .ahead: return .orange
-        case .on: return .secondary
-        case .under: return .green
-        case .exhausted: return .red
+        case .ahead: return t.warn
+        case .on: return t.subtext
+        case .under: return t.green
+        case .exhausted: return t.red
         }
     }
 }
@@ -68,41 +64,92 @@ extension Limit {
 
 // MARK: - Panel
 
+enum PanelTab: String, CaseIterable { case limits = "Limits", tokens = "Tokens" }
+
 struct UsagePanel: View {
     @ObservedObject var store: Store
+    @ObservedObject var tokens: TokenStore
+    @AppStorage("theme") private var themeID = Theme.tokyoNight.id
+    @AppStorage("tab") private var tab: PanelTab = .limits
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+
+    private var t: Theme { Theme.named(themeID) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            // Re-render every 30 s so countdowns and pace markers stay current while open.
-            TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                content(now: ctx.date)
+            Segmented(options: PanelTab.allCases, selection: $tab, fill: true) { $0.rawValue }
+            Group {
+                switch tab {
+                case .limits:
+                    // Re-render every 30 s so countdowns and pace markers stay current while open.
+                    TimelineView(.periodic(from: .now, by: 30)) { ctx in limits(now: ctx.date) }
+                case .tokens:
+                    TokensView(tokens: tokens)
+                }
             }
+            .transition(.opacity)
             if store.usage != nil, let e = store.lastError, !store.inFlight {
                 ErrorBanner(text: "Couldn't refresh: \(e). Retrying at \(clock(store.nextFetchAt)).")
             }
             footer
         }
         .padding(14)
-        .frame(width: 316)
-        .onAppear { store.tick() }
+        .frame(width: 320)
+        .background(background)
+        .foregroundStyle(t.text)
+        .environment(\.theme, t)
+        .preferredColorScheme(t.isDark ? .dark : .light)
+        .animation(.easeOut(duration: 0.2), value: tab)
+        .onAppear { store.tick(); tokens.refresh() }
+        .onChange(of: tab) { if $0 == .tokens { tokens.refresh() } }
+        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+            if tab == .tokens { tokens.refresh() }
+        }
+    }
+
+    /// Theme base with two faint accent glows, so the panel has depth without looking busy.
+    private var background: some View {
+        ZStack {
+            t.base
+            RadialGradient(colors: [t.accent.opacity(t.isDark ? 0.16 : 0.10), .clear],
+                           center: .topLeading, startRadius: 0, endRadius: 260)
+            RadialGradient(colors: [t.accent2.opacity(t.isDark ? 0.12 : 0.08), .clear],
+                           center: .bottomTrailing, startRadius: 0, endRadius: 300)
+        }
+        .ignoresSafeArea()
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("Claude usage").font(.system(size: 15, weight: .semibold))
+        HStack(spacing: 8) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(t.accentGradient)
+            Text("Claude usage").font(.system(size: 15, weight: .semibold, design: .rounded))
             Spacer()
-            Text(subtitle).font(.caption).foregroundStyle(.tertiary).monospacedDigit()
-            Button { store.tick() } label: {
+            Text(subtitle).font(.caption).foregroundStyle(t.muted).monospacedDigit()
+            Menu {
+                ForEach(Theme.all) { theme in
+                    Button { themeID = theme.id } label: {
+                        if theme.id == themeID { Label(theme.name, systemImage: "checkmark") } else { Text(theme.name) }
+                    }
+                }
+            } label: {
+                Image(systemName: "paintpalette.fill")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Theme")
+            Button { store.tick(); tokens.refresh() } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(t.subtext)
                     .rotationEffect(.degrees(store.inFlight ? 360 : 0))
                     .animation(store.inFlight ? .linear(duration: 1).repeatForever(autoreverses: false) : .default,
                                value: store.inFlight)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .keyboardShortcut("r")
             .help("Refresh")
         }
@@ -111,11 +158,11 @@ struct UsagePanel: View {
 
     private var subtitle: String {
         if store.inFlight { return "Refreshing…" }
-        if let at = store.lastGoodAt { return "Updated \(clock(at))" }
+        if let at = store.lastGoodAt { return clock(at) }
         return ""
     }
 
-    @ViewBuilder private func content(now: Date) -> some View {
+    @ViewBuilder private func limits(now: Date) -> some View {
         if let u = store.usage {
             VStack(alignment: .leading, spacing: 10) {
                 if let session = u.limits.first { SessionCard(limit: session, now: now) }
@@ -156,13 +203,17 @@ struct UsagePanel: View {
 
     private var footer: some View {
         HStack {
-            Toggle("Open at login", isOn: Binding(get: { openAtLogin }, set: setOpenAtLogin))
-                .toggleStyle(.checkbox)
+            Button { setOpenAtLogin(!openAtLogin) } label: {
+                Label("Open at login", systemImage: openAtLogin ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(openAtLogin ? t.accent : t.muted)
+            }
             Spacer()
             Button("Quit") { NSApp.terminate(nil) }
+                .foregroundStyle(t.muted)
                 .keyboardShortcut("q")
         }
-        .controlSize(.small)
+        .buttonStyle(.plain)
+        .font(.system(size: 11, weight: .medium))
         .padding(.horizontal, 2)
         .padding(.top, 2)
     }
@@ -179,36 +230,40 @@ struct UsagePanel: View {
 
 // MARK: - Building blocks
 
-/// Soft inset card. Uses the label color at low opacity so it lifts in dark mode and
-/// recedes in light mode without any per-appearance branching.
 struct Card<Content: View>: View {
     @ViewBuilder let content: Content
+    @Environment(\.theme) private var t
 
     var body: some View {
         content
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.primary.opacity(0.045)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.primary.opacity(0.06)))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(t.card))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(LinearGradient(colors: [t.border, t.border.opacity(0.3)],
+                                             startPoint: .top, endPoint: .bottom), lineWidth: 0.75))
     }
 }
 
 struct PacePill: View {
     let info: PaceInfo
+    @Environment(\.theme) private var t
 
     var body: some View {
+        let c = info.pace.color(t)
         Label(info.pace.label, systemImage: info.pace.icon)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(info.pace.color)
+            .foregroundStyle(c)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(Capsule().fill(info.pace.color.opacity(0.12)))
+            .background(Capsule().fill(c.opacity(0.14)))
             .help(info.detail)
     }
 }
 
 struct ErrorBanner: View {
     let text: String
+    @Environment(\.theme) private var t
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -216,16 +271,17 @@ struct ErrorBanner: View {
             Text(text).fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption)
-        .foregroundStyle(.orange)
+        .foregroundStyle(t.warn)
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.orange.opacity(0.1)))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(t.warn.opacity(0.12)))
     }
 }
 
 struct EmptyState: View {
     let loading: Bool
     let text: String
+    @Environment(\.theme) private var t
 
     var body: some View {
         VStack(spacing: 8) {
@@ -234,11 +290,11 @@ struct EmptyState: View {
             } else {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.title3)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(t.warn)
             }
             Text(text)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(t.subtext)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -253,6 +309,7 @@ struct EmptyState: View {
 struct SessionCard: View {
     let limit: Limit
     let now: Date
+    @Environment(\.theme) private var t
 
     var body: some View {
         let info = limit.pace(now: now)
@@ -263,20 +320,20 @@ struct SessionCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Label(limit.label, systemImage: "bolt.fill")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(t.subtext)
                     if limit.resetsAt != nil {
                         Text(remaining(to: limit.resetsAt, now: now))
                             .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
                             .contentTransition(.numericText())
                         Text("until reset at \(resetClock(limit.resetsAt))")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(t.muted)
                     } else {
                         Text("No active session")
                             .font(.system(size: 15, weight: .medium, design: .rounded))
                         Text("Starts with your next message")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(t.muted)
                     }
                     if let info { PacePill(info: info).padding(.top, 4) }
                 }
@@ -291,29 +348,30 @@ struct SessionCard: View {
 struct RingGauge: View {
     let pct: Double
     let marker: Double?
+    @Environment(\.theme) private var t
 
     private let lineWidth: CGFloat = 9
 
     var body: some View {
-        let color = levelColor(pct)
         let fill = min(1, pct / 100)
+        let (from, to) = pct >= 90 ? (t.red.opacity(0.6), t.red) : pct >= 75 ? (t.warn.opacity(0.6), t.warn) : (t.accent, t.accent2)
         ZStack {
             Circle()
-                .stroke(.primary.opacity(0.08), lineWidth: lineWidth)
+                .stroke(t.track, lineWidth: lineWidth)
             Circle()
                 .trim(from: 0, to: fill)
                 .stroke(
-                    AngularGradient(colors: [color.opacity(0.55), color], center: .center,
+                    AngularGradient(colors: [from, to], center: .center,
                                     startAngle: .degrees(0), endAngle: .degrees(360 * max(fill, 0.02))),
                     style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
-                .shadow(color: color.opacity(0.35), radius: 5)
+                .shadow(color: to.opacity(0.5), radius: 6)
                 .animation(.easeOut(duration: 0.7), value: pct)
             if let marker {
                 GeometryReader { g in
                     Circle()
-                        .fill(.primary.opacity(0.45))
+                        .fill(t.text.opacity(0.7))
                         .frame(width: 5, height: 5)
                         .position(x: g.size.width / 2, y: 0)
                         .rotationEffect(.degrees(360 * marker))
@@ -337,14 +395,14 @@ struct BarRow: View {
     let value: String
     let caption: String
     let pace: PaceInfo?
+    @Environment(\.theme) private var t
 
     var body: some View {
-        let color = levelColor(pct)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(t.level(pct))
                     .frame(width: 14)
                 Text(label).font(.system(size: 13, weight: .medium))
                 Spacer()
@@ -354,15 +412,16 @@ struct BarRow: View {
             }
             GeometryReader { g in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.primary.opacity(0.08))
+                    Capsule().fill(t.track)
                     Capsule()
-                        .fill(LinearGradient(colors: [color.opacity(0.7), color], startPoint: .leading, endPoint: .trailing))
+                        .fill(t.levelGradient(pct))
                         .frame(width: pct > 0 ? max(8, g.size.width * min(1, pct / 100)) : 0)
+                        .shadow(color: t.level(pct).opacity(0.45), radius: 4)
                         .animation(.easeOut(duration: 0.7), value: pct)
                     if let pace {
                         // Even-pace marker: usage to the right of it is running ahead of the clock.
                         RoundedRectangle(cornerRadius: 1)
-                            .fill(.primary.opacity(0.45))
+                            .fill(t.text.opacity(0.7))
                             .frame(width: 2, height: 12)
                             .position(x: max(1, min(g.size.width - 1, g.size.width * pace.elapsed)), y: g.size.height / 2)
                             .help(pace.detail)
@@ -371,12 +430,12 @@ struct BarRow: View {
             }
             .frame(height: 7)
             HStack {
-                Text(caption).font(.caption).foregroundStyle(.secondary)
+                Text(caption).font(.caption).foregroundStyle(t.muted)
                 Spacer()
                 if let pace {
                     Label(pace.pace.label, systemImage: pace.pace.icon)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(pace.pace.color)
+                        .foregroundStyle(pace.pace.color(t))
                         .help(pace.detail)
                 }
             }

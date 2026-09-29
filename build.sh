@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")"
 APP=build/ClaudeUsageBar.app
 mkdir -p "$APP/Contents/MacOS"
-swiftc -O -o "$APP/Contents/MacOS/ClaudeUsageBar" Sources/*.swift
+swiftc -O -target "$(uname -m)-apple-macos13.0" -o "$APP/Contents/MacOS/ClaudeUsageBar" Sources/*.swift
 cp Info.plist "$APP/Contents/Info.plist"
 # Sign with the stable "ClaudeUsageBar" certificate if make-cert.sh created it, else ad-hoc.
 if security find-identity -v -p codesigning | grep -q '"ClaudeUsageBar"'; then

@@ -6,6 +6,7 @@ import SwiftUI
 
 struct ClaudeUsageBarApp: App {
     @StateObject private var store = Store()
+    @StateObject private var tokens = TokenStore()
 
     init() {
         // Refuse to run twice: a second instance would double the request rate.
@@ -15,7 +16,7 @@ struct ClaudeUsageBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            UsagePanel(store: store)
+            UsagePanel(store: store, tokens: tokens)
         } label: {
             Text(store.menuTitle).monospacedDigit()
         }
