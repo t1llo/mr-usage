@@ -38,16 +38,21 @@ Pick **OpenAI** in the dropdown next to the title. Nothing to configure either:
   is recomputed from the token counts.
 
 Token counts only exist once a tool has made a request: Codex writes its session log after the
-first message, so a fresh install shows no token counts until then. With a ChatGPT login the
-OpenAI Tokens tab also has the account-wide numbers Codex's `/usage` shows, which cover every
-surface (CLI, IDE, app, cloud, OpenCode) on every machine:
+first message, so a fresh install shows no token counts until then.
 
-- **Overview**: tokens per day over 7 or 30 days (daily or cumulative), lifetime tokens, the peak
-  day, the current and longest daily streak, the number of chats, and the split by model, from
-  `wham/profiles/me` and `wham/usage/daily-token-usage-breakdown`.
-- **Plan**: the plan's recent weekly windows with the share of each used and the split by model,
-  from `wham/usage/plan_limit_history`.
-- **This Mac**: the token counts and API cost from the logs above.
+With a ChatGPT login the OpenAI tabs also show the account-wide numbers Codex's `/usage` shows,
+which cover every surface (CLI, IDE, app, cloud, OpenCode) on every machine:
+
+- **Tokens** (the "All devices" view) looks like the Claude one: tokens per day over 7 or 30
+  days, the API cost, input, output and cache totals, the split by model, plus lifetime tokens,
+  peak day, streak and chat count. The account reports only total tokens per day
+  (`wham/profiles/me`) and each model's share of each day (`wham/usage/daily-token-usage-breakdown`),
+  so the split into input, cache reads and output, and with it the API cost, is an **estimate**:
+  from this Mac's Codex logs when they hold at least 1M tokens, else a typical Codex session
+  (88% cache reads, 10% uncached input, 2% output). "This Mac" shows the exact counts from the
+  logs, when there are any.
+- **Limits** adds the plan's recent weekly windows with the share of each used and the split by
+  model (`wham/usage/plan_limit_history`).
 
 OpenAI aggregates the account numbers daily, so today is missing and the current window can lag
 the live limit by up to a day. Codex logs compressed to `.jsonl.zst` (an experimental Codex

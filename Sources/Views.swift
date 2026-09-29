@@ -129,7 +129,6 @@ struct UsagePanel: View {
         .environment(\.theme, t)
         .preferredColorScheme(t.isDark ? .dark : .light)
         .animation(.easeOut(duration: 0.2), value: tab)
-        .animation(.easeOut(duration: 0.2), value: provider)
         .onAppear { store.tick(); tokens.refresh() }
         .onChange(of: tab) { if $0 == .tokens { tokens.refresh() } }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
@@ -193,7 +192,7 @@ struct UsagePanel: View {
         .popover(isPresented: $picking, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Provider.allCases) { p in
-                    Button { provider = p; picking = false } label: {
+                    Button { choose(p) } label: {
                         HStack(spacing: 8) {
                             Image(systemName: p.icon).foregroundStyle(t.accent).frame(width: 16)
                             VStack(alignment: .leading, spacing: 1) {
@@ -218,6 +217,19 @@ struct UsagePanel: View {
             .background(t.card)
             .environment(\.theme, t)
             .preferredColorScheme(t.isDark ? .dark : .light)
+        }
+    }
+
+    /// Close the list first and switch on the next pass without animation: animating the
+    /// whole panel while the menu bar window resizes to the other provider's height and the
+    /// popover closes is what made the switch stutter.
+    private func choose(_ p: Provider) {
+        picking = false
+        guard p != provider else { return }
+        DispatchQueue.main.async {
+            var tx = Transaction()
+            tx.disablesAnimations = true
+            withTransaction(tx) { provider = p }
         }
     }
 
@@ -250,6 +262,7 @@ struct UsagePanel: View {
                     .help(cx.live ? "Fetched from ChatGPT with Codex's login"
                           : "Codex logs your plan's limits with every request, so use elsewhere (OpenCode, ChatGPT) shows up after your next Codex request.")
                 if !cx.live, let e = tokens.liveError { ErrorBanner(text: "Live limits unavailable: \(e).") }
+                if let h = tokens.planHistory { PlanHistoryCard(history: h) }
             }
         } else {
             EmptyState(loading: !tokens.loaded, text: !tokens.loaded ? "Reading Codex logs…"

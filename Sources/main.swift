@@ -8,7 +8,6 @@ import SwiftUI
 struct ClaudeUsageBarApp: App {
     @StateObject private var store = Store()
     @StateObject private var tokens = TokenStore()
-    @AppStorage("provider") private var provider: Provider = .claude
 
     init() {
         // Refuse to run twice: a second instance would double the request rate.
@@ -20,9 +19,20 @@ struct ClaudeUsageBarApp: App {
         MenuBarExtra {
             UsagePanel(store: store, tokens: tokens)
         } label: {
-            Text(provider == .claude ? store.menuTitle : tokens.menuTitle()).monospacedDigit()
+            MenuTitle(store: store, tokens: tokens)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Reads the provider itself, so switching it redraws only this label, not the whole scene.
+struct MenuTitle: View {
+    @ObservedObject var store: Store
+    @ObservedObject var tokens: TokenStore
+    @AppStorage("provider") private var provider: Provider = .claude
+
+    var body: some View {
+        Text(provider == .claude ? store.menuTitle : tokens.menuTitle()).monospacedDigit()
     }
 }
 

@@ -148,7 +148,7 @@ struct AccountActivity {
     let effort: (name: String, share: Double)?
     /// Tokens per local calendar day, days without usage left out.
     let daily: [Date: Double]
-    /// Each day's usage per model. The server sends it relative to the busiest day, so only
+    /// Each day's usage per model id. The server sends it relative to the busiest day, so only
     /// the shares mean anything.
     let modelDays: [Date: [String: Double]]
 }
@@ -174,7 +174,7 @@ func parseAccountActivity(_ json: [String: Any], breakdown: [String: Any]?) -> A
         for m in day["models"] as? [[String: Any]] ?? [] {
             // One row per model and speed; the speeds are summed.
             guard let id = m["model"] as? String, let v = m["credits"] as? Double, v > 0 else { continue }
-            modelDays[d, default: [:]][modelName(id), default: 0] += v
+            modelDays[d, default: [:]][id, default: 0] += v
         }
     }
     let effort = (s["most_used_reasoning_effort"] as? String).map {
@@ -194,4 +194,45 @@ private func calendarDay(_ any: Any?) -> Date? {
     f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "yyyy-MM-dd"
     return f.date(from: s)
+}
+
+/// How a token total divides into kinds, as fractions that add up to 1. The account only
+/// reports totals, and the API price depends on the split, so the cost needs one.
+struct TokenMix {
+    let input, cacheRead, cacheWrite, output: Double
+
+    /// A typical Codex session: each turn re-reads the conversation from the prompt cache, so
+    /// about nine in ten tokens are cache reads and only a few percent are output.
+    static let codex = TokenMix(input: 0.098, cacheRead: 0.882, cacheWrite: 0, output: 0.02)
+
+    /// The split in these records; nil when there are too few tokens to go by.
+    init?(_ records: [TokenRecord]) {
+        let i = Double(records.reduce(0) { $0 + $1.input }), r = Double(records.reduce(0) { $0 + $1.cacheRead })
+        let w = Double(records.reduce(0) { $0 + $1.cacheWrite }), o = Double(records.reduce(0) { $0 + $1.output })
+        let total = i + r + w + o
+        guard total >= 1_000_000 else { return nil }
+        self.init(input: i / total, cacheRead: r / total, cacheWrite: w / total, output: o / total)
+    }
+
+    init(input: Double, cacheRead: Double, cacheWrite: Double, output: Double) {
+        self.input = input; self.cacheRead = cacheRead; self.cacheWrite = cacheWrite; self.output = output
+    }
+}
+
+/// One record per day and model: the day's tokens divided by each model's share of that day's
+/// usage (all to "unknown" without a breakdown), then into kinds by `mix`.
+func estimatedRecords(_ a: AccountActivity, mix: TokenMix) -> [TokenRecord] {
+    a.daily.flatMap { day, tokens -> [TokenRecord] in
+        let models = a.modelDays[day] ?? [:]
+        let sum = models.values.reduce(0, +)
+        let shares = sum > 0 ? models.mapValues { $0 / sum } : ["unknown": 1]
+        return shares.map { name, share in
+            let n = tokens * share
+            let input = Int(n * mix.input), read = Int(n * mix.cacheRead)
+            let write = Int(n * mix.cacheWrite), output = Int(n * mix.output)
+            return TokenRecord(date: day, model: name, provider: .openai, source: .chatgpt,
+                               input: input, output: output, cacheWrite: write, cacheRead: read,
+                               cost: openAICost(model: name, input: input, output: output, cacheWrite: write, cacheRead: read))
+        }
+    }
 }

@@ -9,7 +9,11 @@ enum Provider: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum Source: String { case claudeCode = "Claude Code", codex = "Codex", opencode = "OpenCode" }
+enum Source: String {
+    case claudeCode = "Claude Code", codex = "Codex", opencode = "OpenCode"
+    /// Daily totals from the ChatGPT account, split into token kinds by estimate.
+    case chatgpt = "ChatGPT account"
+}
 
 struct TokenRecord {
     let date: Date
@@ -106,7 +110,7 @@ actor TokenScanner {
 
 @MainActor
 final class TokenStore: ObservableObject {
-    @Published private(set) var records: [TokenRecord] = []
+    @Published private(set) var records: [TokenRecord] = [] { didSet { rebuildAccount() } }
     /// The live ChatGPT limits when the fetch works, else the newest logged snapshot.
     var codexLimits: CodexLimits? {
         guard let live = liveLimits else { return loggedLimits }
@@ -120,7 +124,17 @@ final class TokenStore: ObservableObject {
     /// Past windows of the ChatGPT plan, from the endpoint behind Codex's /usage.
     @Published private(set) var planHistory: PlanHistory?
     /// Lifetime and daily tokens across every Codex surface, the overview in Codex's /usage.
-    @Published private(set) var activity: AccountActivity?
+    @Published private(set) var activity: AccountActivity? { didSet { rebuildAccount() } }
+    /// `activity` as one record per day and model, so it charts like the log records.
+    private(set) var accountRecords: [TokenRecord] = []
+    /// Whether the estimated split of `accountRecords` comes from this Mac's Codex logs.
+    private(set) var mixFromLogs = false
+    /// Summaries are asked for on every redraw (hover, provider switch), and a 30-day one over
+    /// thousands of records takes a frame's worth of time, so each is computed once per data change.
+    private var summaries: [SummaryKey: TokenSummary] = [:]
+    private struct SummaryKey: Hashable {
+        let provider: Provider, account: Bool, range: TokenRange, metric: TokenMetric, bucket: Date
+    }
     private var nextHistoryAt = Date.distantPast
     private var liveInterval: TimeInterval = 120
     private var nextLiveAt = Date.distantPast
@@ -197,6 +211,23 @@ final class TokenStore: ObservableObject {
 }
 
 extension TokenStore {
+    func summary(_ provider: Provider, account: Bool, range: TokenRange, metric: TokenMetric) -> TokenSummary {
+        let now = Date()
+        let key = SummaryKey(provider: provider, account: account, range: range, metric: metric,
+                             bucket: Calendar.current.dateInterval(of: range.unit, for: now)!.start)
+        if let s = summaries[key] { return s }
+        let s = summarize(account ? accountRecords : records, provider: provider, range: range, metric: metric, now: now)
+        summaries[key] = s
+        return s
+    }
+
+    private func rebuildAccount() {
+        summaries = [:]
+        let local = TokenMix(records.filter { $0.source == .codex })
+        mixFromLogs = local != nil
+        accountRecords = activity.map { estimatedRecords($0, mix: local ?? .codex) } ?? []
+    }
+
     /// Menu bar text for OpenAI: the Codex windows' percentages, or "OpenAI" without a snapshot.
     func menuTitle(now: Date = Date()) -> String {
         guard let u = codexLimits?.current(now: now), !u.limits.isEmpty else { return "OpenAI" }
@@ -269,12 +300,23 @@ func summarize(_ records: [TokenRecord], provider: Provider, range: TokenRange, 
         for m in TokenMetric.allCases { s.totals[m, default: 0] += m.value(r) }
         if r.cost == nil { s.unpriced.insert(modelName(r.model)) }
         let v = metric.value(r)
-        perBucket[cal.dateInterval(of: range.unit, for: r.date)!.start, default: 0] += v
+        perBucket[bucketStart(r.date, in: starts), default: 0] += v
         perModel[modelName(r.model) + (tagged ? " · \(r.source.rawValue)" : ""), default: 0] += v
     }
     s.buckets = starts.map { TokenBucket(start: $0, value: perBucket[$0] ?? 0) }
     s.byModel = perModel.filter { $0.value > 0 }.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
     return s
+}
+
+/// The last bucket start at or before `date`, by binary search: far cheaper per record than
+/// asking the calendar, and exact across DST changes because `starts` came from the calendar.
+private func bucketStart(_ date: Date, in starts: [Date]) -> Date {
+    var lo = 0, hi = starts.count - 1
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2
+        if starts[mid] <= date { lo = mid } else { hi = mid - 1 }
+    }
+    return starts[lo]
 }
 
 /// "claude-opus-5-5" -> "Opus 5.5", "claude-haiku-4-5-20251001" -> "Haiku 4.5",

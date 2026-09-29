@@ -34,10 +34,10 @@ extension TokenMetric {
     }
 }
 
-/// The OpenAI Tokens tab's views: the ChatGPT account's numbers (as in Codex's /usage) or the
-/// token counts in logs on this Mac.
-enum OpenAIPane: String, CaseIterable {
-    case overview = "Overview", plan = "Plan", mac = "This Mac"
+/// Where the OpenAI Tokens tab reads from: the ChatGPT account (every device, daily) or the
+/// logs on this Mac (per request, exact split).
+enum OpenAISource: String, CaseIterable {
+    case account = "All devices", mac = "This Mac"
 }
 
 struct TokensView: View {
@@ -45,40 +45,27 @@ struct TokensView: View {
     let provider: Provider
     @AppStorage("tokenRange") private var range: TokenRange = .week
     @AppStorage("tokenMetric") private var metric: TokenMetric = .cost
-    @AppStorage("openAIPane") private var pane: OpenAIPane = .overview
+    @AppStorage("openAISource") private var source: OpenAISource = .account
     @State private var hovered: Date?
     @Environment(\.theme) private var t
 
     var body: some View {
-        let mine = tokens.records.filter { $0.provider == provider }
+        let hasLocal = tokens.records.contains { $0.provider == provider }
+        let hasAccount = provider == .openai && tokens.activity != nil
+        let account = hasAccount && (source == .account || !hasLocal)
         VStack(alignment: .leading, spacing: 10) {
-            let panes = provider == .openai ? openAIPanes : []
-            if panes.count > 1 {
-                let shown = panes.contains(pane) ? pane : panes[0]
-                Segmented(options: panes, selection: $pane) { $0.rawValue }
-                switch shown {
-                case .overview: if let a = tokens.activity { AccountActivityCard(activity: a) }
-                case .plan: if let h = tokens.planHistory { PlanHistoryCard(history: h) }
-                case .mac: local(mine)
-                }
-            } else {
-                local(mine)
+            if hasAccount && hasLocal {
+                Segmented(options: OpenAISource.allCases, selection: $source) { $0.rawValue }
             }
+            if account { content(account: true) }
+            else if tokens.loaded && !hasLocal { empty }
+            else { content(account: false) }
         }
     }
 
-    /// Account panes only when the ChatGPT login returned them.
-    private var openAIPanes: [OpenAIPane] {
-        var p: [OpenAIPane] = []
-        if tokens.activity != nil { p.append(.overview) }
-        if tokens.planHistory != nil { p.append(.plan) }
-        return p + [.mac]
-    }
-
-    @ViewBuilder private func local(_ mine: [TokenRecord]) -> some View {
-        if tokens.loaded && mine.isEmpty { empty } else { content(mine) }
-    }
-
+    /// The account is aggregated by day, so it has no 24-hour view.
+    private func ranges(_ account: Bool) -> [TokenRange] { account ? [.week, .month] : TokenRange.allCases }
+    private func shown(_ account: Bool) -> TokenRange { account && range == .day ? .week : range }
     /// Nothing logged for this provider inside the 30-day horizon: say why instead of drawing
     /// an empty chart that looks broken.
     private var empty: some View {
@@ -112,38 +99,55 @@ struct TokensView: View {
         }
     }
 
-    private func content(_ mine: [TokenRecord]) -> some View {
-        let s = summarize(mine, provider: provider, range: range, metric: metric)
+    private func content(account: Bool) -> some View {
+        let r = shown(account)
+        let s = tokens.summary(provider, account: account, range: r, metric: metric)
+        let est = account ? "est." : nil
         return VStack(alignment: .leading, spacing: 10) {
             Card {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .firstTextBaseline) {
-                        readout(s)
+                        readout(s, range: r)
                         Spacer()
-                        Segmented(options: TokenRange.allCases, selection: $range) { $0.rawValue }
+                        Segmented(options: ranges(account), selection: Binding(get: { r }, set: { range = $0 })) { $0.rawValue }
                     }
-                    if tokens.loaded { chart(s) } else {
+                    if tokens.loaded || account { chart(s, range: r) } else {
                         ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 120)
                     }
                 }
             }
             MetricTile(metric: .cost, value: s.totals[.cost] ?? 0, selected: metric == .cost,
-                       caption: "if billed at API prices", help: metric.help(provider)) { metric = .cost }
+                       caption: account ? "estimated at API prices" : "if billed at API prices",
+                       help: account ? costHelp : metric.help(provider)) { metric = .cost }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(TokenMetric.tokenKinds) { m in
-                    MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == metric, help: m.help(provider)) { metric = m }
+                    MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == metric, caption: est,
+                               help: m.help(provider) + (account ? ". Estimated: the account only reports totals." : "")) { metric = m }
                 }
             }
             if !s.byModel.isEmpty { Card { ModelList(rows: s.byModel, metric: metric) } }
+            if account, let a = tokens.activity { AccountStats(activity: a) }
             if metric == .cost, !s.unpriced.isEmpty {
                 Text("No API price for \(s.unpriced.sorted().joined(separator: ", ")), left out of the cost")
                     .font(.caption2).foregroundStyle(t.warn)
                     .frame(maxWidth: .infinity)
             }
-            Text(footnote(Set(mine.map(\.source))))
+            Text(account ? accountNote : footnote(Set(tokens.records.filter { $0.provider == provider }.map(\.source))))
                 .font(.caption2).foregroundStyle(t.muted)
+                .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
+    }
+
+    private var costHelp: String {
+        "What these tokens would cost at OpenAI API list prices (Standard tier). The account reports "
+            + "total tokens per day and model; the split into input, cache and output is "
+            + (tokens.mixFromLogs ? "taken from this Mac's Codex logs." : "a typical Codex session's (88% cache reads, 10% input, 2% output).")
+    }
+
+    private var accountNote: String {
+        "From your ChatGPT account, every device, updated daily. Split and cost estimated from "
+            + (tokens.mixFromLogs ? "this Mac's Codex logs." : "a typical Codex session.")
     }
 
     /// Which tools the numbers come from, or where they would come from.
@@ -155,24 +159,24 @@ struct TokensView: View {
     }
 
     /// Hovered bucket's value, or the range total for the selected metric.
-    private func readout(_ s: TokenSummary) -> some View {
+    private func readout(_ s: TokenSummary, range: TokenRange) -> some View {
         let b = hovered.flatMap { h in s.buckets.first { $0.start == h } }
         return VStack(alignment: .leading, spacing: 1) {
             Text(metric.format(b?.value ?? s.totals[metric] ?? 0))
                 .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
                 .contentTransition(.numericText())
-            Text("\(metric == .cost ? "API cost" : metric.rawValue.lowercased()) · \(b.map { bucketLabel($0.start) } ?? "last \(range.rawValue)")")
+            Text("\(metric == .cost ? "API cost" : metric.rawValue.lowercased()) · \(b.map { bucketLabel($0.start, range: range) } ?? "last \(range.rawValue)")")
                 .font(.caption).foregroundStyle(t.muted)
         }
     }
 
-    private func bucketLabel(_ d: Date) -> String {
+    private func bucketLabel(_ d: Date, range: TokenRange) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US")
         f.dateFormat = range == .day ? "EEE ha" : "EEE MMM d"
         return f.string(from: d).replacingOccurrences(of: "AM", with: "am").replacingOccurrences(of: "PM", with: "pm")
     }
 
-    private func chart(_ s: TokenSummary) -> some View {
+    private func chart(_ s: TokenSummary, range: TokenRange) -> some View {
         Chart(s.buckets) { b in
             BarMark(x: .value("Time", b.start, unit: range.unit), y: .value("Tokens", b.value))
                 .foregroundStyle(metric.color(t))
@@ -366,176 +370,29 @@ struct PlanHistoryCard: View {
     private func pct(_ v: Double) -> String { v > 0 && v < 1 ? "<1%" : "\(Int(v.rounded()))%" }
 }
 
-enum ActivityRange: String, CaseIterable {
-    case week = "7d", month = "30d"
-    var days: Int { self == .week ? 7 : 30 }
-}
-
-enum ActivityMode: String, CaseIterable { case daily = "Daily", cumulative = "Cumulative" }
-
-/// Tokens per day across every Codex surface, with the account's lifetime stats, as the overview
-/// in Codex's /usage shows them. Covers other machines and the cloud, unlike the log counts.
-struct AccountActivityCard: View {
+/// The account's lifetime numbers, as the overview in Codex's /usage shows them.
+struct AccountStats: View {
     let activity: AccountActivity
-    @AppStorage("activityRange") private var range: ActivityRange = .week
-    @AppStorage("activityMode") private var mode: ActivityMode = .daily
-    @State private var hovered: Date?
     @Environment(\.theme) private var t
 
-    private struct Day: Identifiable {
-        let start: Date
-        let tokens: Double
-        var id: Date { start }
-    }
-
     var body: some View {
-        let days = series()
-        let total = days.reduce(0) { $0 + $1.tokens }
         Card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Codex usage", systemImage: "chart.bar.fill")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(t.subtext)
-                    Spacer()
-                    Segmented(options: ActivityRange.allCases, selection: $range) { $0.rawValue }
-                }
-                HStack(alignment: .firstTextBaseline) {
-                    readout(days, total: total)
-                    Spacer()
-                    Segmented(options: ActivityMode.allCases, selection: $mode) { $0.rawValue }
-                }
-                chart(days)
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                    stat("Lifetime", compact(activity.lifetime), "tokens")
-                    stat("Peak day", compact(activity.peakDay), "tokens")
-                    stat("Streak", "\(activity.currentStreak)d", "best \(activity.longestStreak)d")
-                    if let c = activity.chats { stat("Chats", "\(c)", "all time") }
-                }
-                let models = byModel(days)
-                if !models.isEmpty {
-                    Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5)
-                    Text("By model, last \(range.days) days").font(.caption).foregroundStyle(t.muted)
-                    ForEach(models.prefix(4), id: \.name) { m in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(m.name).font(.system(size: 12, weight: .medium))
-                                Spacer()
-                                Text(share(m.share)).font(.system(size: 12, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(t.muted)
-                            }
-                            GeometryReader { g in
-                                ZStack(alignment: .leading) {
-                                    Capsule().fill(t.track)
-                                    Capsule().fill(t.blue).frame(width: max(4, g.size.width * m.share / 100))
-                                }
-                            }
-                            .frame(height: 4)
-                        }
-                    }
-                }
-                Text(footer).font(.caption2).foregroundStyle(t.muted)
+            HStack(alignment: .top, spacing: 0) {
+                stat("Lifetime", compact(activity.lifetime), "tokens")
+                stat("Peak day", compact(activity.peakDay), "tokens")
+                stat("Streak", "\(activity.currentStreak)d", "best \(activity.longestStreak)d")
+                if let c = activity.chats { stat("Chats", "\(c)", "all time") }
             }
         }
-        .help("From your ChatGPT account: Codex CLI, IDE, app and cloud on every machine. Updated daily by OpenAI.")
-    }
-
-    /// One entry per day of the range, ending today, zero where nothing was used. Cumulative
-    /// adds up from the start of the range.
-    private func series() -> [Day] {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        var run = 0.0
-        return (0..<range.days).reversed().compactMap { back in
-            guard let d = cal.date(byAdding: .day, value: -back, to: today) else { return nil }
-            let n = activity.daily[d] ?? 0
-            run += n
-            return Day(start: d, tokens: mode == .daily ? n : run)
-        }
-    }
-
-    /// Each model's share of the range's usage, 0-100, largest first.
-    private func byModel(_ days: [Day]) -> [(name: String, share: Double)] {
-        var sum: [String: Double] = [:]
-        for d in days { for (m, v) in activity.modelDays[d.start] ?? [:] { sum[m, default: 0] += v } }
-        let total = sum.values.reduce(0, +)
-        guard total > 0 else { return [] }
-        return sum.map { (name: $0.key, share: $0.value / total * 100) }.sorted { $0.share > $1.share }
-    }
-
-    private func readout(_ days: [Day], total: Double) -> some View {
-        let h = hovered.flatMap { h in days.first { $0.start == h } }
-        let label: String
-        if let h { label = (mode == .daily ? "tokens · " : "tokens through ") + day(h.start) }
-        else { label = "tokens · last \(range.days) days" }
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(compact(h?.tokens ?? total))
-                .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
-                .contentTransition(.numericText())
-            Text(label).font(.caption).foregroundStyle(t.muted)
-        }
-    }
-
-    private func chart(_ days: [Day]) -> some View {
-        Chart(days) { d in
-            BarMark(x: .value("Day", d.start, unit: .day), y: .value("Tokens", d.tokens))
-                .foregroundStyle(mode == .daily ? t.blue : t.cyan)
-                .cornerRadius(2)
-                .opacity(hovered == nil || hovered == d.start ? 1 : 0.4)
-        }
-        .chartYAxis {
-            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { v in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3])).foregroundStyle(t.border)
-                AxisValueLabel { if let n = v.as(Double.self) { Text(compact(n)).foregroundStyle(t.muted) } }
-            }
-        }
-        .chartXAxis {
-            switch range {
-            case .week: AxisMarks(values: .stride(by: .day)) { _ in AxisValueLabel(format: .dateTime.weekday(.narrow), centered: true).foregroundStyle(t.muted) }
-            case .month: AxisMarks(values: .stride(by: .day, count: 7)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day()).foregroundStyle(t.muted) }
-            }
-        }
-        .chartOverlay { proxy in
-            GeometryReader { g in
-                Rectangle().fill(.clear).contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        guard case .active(let p) = phase,
-                              let d: Date = proxy.value(atX: p.x - g[proxy.plotAreaFrame].origin.x)
-                        else { hovered = nil; return }
-                        hovered = Calendar.current.startOfDay(for: d)
-                    }
-            }
-        }
-        .frame(height: 110)
-        .animation(.easeOut(duration: 0.4), value: mode)
-        .animation(.easeOut(duration: 0.4), value: range)
+        .help(activity.effort.map { "Mostly \($0.name) reasoning (\(Int($0.share.rounded()))% of turns)" } ?? "")
     }
 
     private func stat(_ label: String, _ value: String, _ caption: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(t.muted)
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(value).font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-                Text(caption).font(.caption).foregroundStyle(t.muted)
-            }
+            Text(value).font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
+            Text(caption).font(.caption2).foregroundStyle(t.muted)
         }
-        .padding(.horizontal, 10).padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(t.base.opacity(0.35)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(t.border.opacity(0.6), lineWidth: 0.75))
     }
-
-    /// "Stats as of Sep 29 · mostly medium reasoning (63%)".
-    private var footer: String {
-        var parts: [String] = []
-        if let d = activity.asOf { parts.append("Stats as of \(day(d))") }
-        if let e = activity.effort { parts.append("mostly \(e.name) reasoning (\(Int(e.share.rounded()))%)") }
-        return parts.joined(separator: " · ")
-    }
-
-    private func day(_ d: Date) -> String {
-        let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "EEE MMM d"
-        return f.string(from: d)
-    }
-
-    private func share(_ v: Double) -> String { v > 0 && v < 1 ? "<1%" : "\(Int(v.rounded()))%" }
 }
