@@ -17,6 +17,12 @@ and estimated API costs without leaving your desktop.
 - **Optional leaderboard sharing** at [usage.beffa.xyz](https://usage.beffa.xyz), off by default.
 - **Automatic updates** and **Open at Login**.
 
+## Demo
+
+[![Mr. Usage demo: exploring token charts, API costs, and plan limits](docs/assets/mr-usage-demo.gif)](docs/assets/mr-usage-demo.mp4)
+
+[Watch the full-quality recording](docs/assets/mr-usage-demo.mp4) · 19 seconds
+
 ## Install
 
 Requires **macOS 13 or later**. Downloads support **Apple Silicon and Intel**.
