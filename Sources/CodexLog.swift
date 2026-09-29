@@ -30,21 +30,23 @@ actor CodexScanner {
         var sawRecord = false
     }
 
-    /// OpenAI convention: `input` includes cached and cache-write tokens, `output` includes reasoning.
+    /// OpenAI convention: `input` includes cached and cache-write tokens, `output` includes
+    /// reasoning (`reasoning` is the part of it spent thinking, which grows with the effort).
     private struct Tokens: Equatable {
-        var input = 0, cached = 0, cacheWrite = 0, output = 0, total = 0
+        var input = 0, cached = 0, cacheWrite = 0, output = 0, reasoning = 0, total = 0
         init() {}
         init(_ d: [String: Any]?) {
             input = d?["input_tokens"] as? Int ?? 0
             cached = d?["cached_input_tokens"] as? Int ?? 0
             cacheWrite = d?["cache_write_input_tokens"] as? Int ?? 0
             output = d?["output_tokens"] as? Int ?? 0
+            reasoning = d?["reasoning_output_tokens"] as? Int ?? 0
             total = d?["total_tokens"] as? Int ?? 0
         }
         static func + (a: Tokens, b: Tokens) -> Tokens {
             var r = Tokens()
             r.input = a.input + b.input; r.cached = a.cached + b.cached; r.cacheWrite = a.cacheWrite + b.cacheWrite
-            r.output = a.output + b.output; r.total = a.total + b.total
+            r.output = a.output + b.output; r.reasoning = a.reasoning + b.reasoning; r.total = a.total + b.total
             return r
         }
     }
@@ -154,10 +156,13 @@ actor CodexScanner {
     private func put(_ key: String, date: Date, model: String?, _ u: Tokens) {
         let model = model ?? "unknown"
         let input = max(0, u.input - u.cached - u.cacheWrite)
+        // Reasoning bills as output at every effort. Codex copies the API's output_tokens, which
+        // already includes it; only when the total says it was left out is it added back.
+        let output = u.reasoning > 0 && u.total == u.input + u.output + u.reasoning ? u.output + u.reasoning : u.output
         records[key] = TokenRecord(
             date: date, model: model, provider: .openai, source: .codex,
-            input: input, output: u.output, cacheWrite: u.cacheWrite, cacheRead: u.cached,
-            cost: openAICost(model: model, input: input, output: u.output, cacheWrite: u.cacheWrite, cacheRead: u.cached))
+            input: input, output: output, cacheWrite: u.cacheWrite, cacheRead: u.cached,
+            cost: openAICost(model: model, input: input, output: output, cacheWrite: u.cacheWrite, cacheRead: u.cached))
     }
 
     private func parseLimits(_ l: (date: Date, json: [String: Any])) -> CodexLimits? {
