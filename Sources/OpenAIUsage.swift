@@ -67,7 +67,7 @@ private func chatGPTGet(_ path: String, _ auth: CodexAuth) async throws -> [Stri
     let http = resp as? HTTPURLResponse
     if let code = http?.statusCode, code != 200 {
         if code == 401 { throw CodexAuthError.expired }
-        throw FetchError.http(code, retryAfter: http?.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init),
+        throw FetchError.http(code, retryAfter: retryAfterDelay(http?.value(forHTTPHeaderField: "Retry-After")),
                               message: nil)
     }
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw FetchError.badJSON }

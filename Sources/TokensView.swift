@@ -184,7 +184,7 @@ struct TokenChartCard: View {
         let b = hovered.flatMap { h in summary.buckets.first { $0.start == h } }
         return VStack(alignment: .leading, spacing: 4) {
             Text(metric.format(b?.value ?? summary.totals[metric] ?? 0))
-                .font(.system(size: 30, weight: .medium).monospacedDigit())
+                .font(.system(size: 30, weight: .semibold).monospacedDigit())
                 .tracking(-0.8)
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .contentTransition(.numericText())
@@ -213,7 +213,7 @@ struct TokenChartCard: View {
                     .accessibilityHidden(true)
                 LineMark(x: .value("Time", b.start, unit: range.unit), y: .value(valueLabel, b.value))
                     .interpolationMethod(.monotone)
-                    .lineStyle(StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
+                    .lineStyle(StrokeStyle(lineWidth: 2.75, lineCap: .round, lineJoin: .round))
                     .foregroundStyle(color.opacity(0.9))
                     .accessibilityLabel(bucketLabel(b.start))
                     .accessibilityValue(metric.format(b.value))
@@ -224,7 +224,7 @@ struct TokenChartCard: View {
                     .foregroundStyle(t.subtext.opacity(0.4))
                     .accessibilityHidden(true)
                 PointMark(x: .value("Time", b.start, unit: range.unit), y: .value(valueLabel, b.value))
-                    .symbolSize(24).foregroundStyle(color)
+                    .symbolSize(32).foregroundStyle(color)
                     .accessibilityHidden(true)
             }
         }
@@ -234,7 +234,8 @@ struct TokenChartCard: View {
                 AxisValueLabel {
                     if let n = v.as(Double.self) {
                         Text(metric == .cost ? "$" + compact(n) : compact(n))
-                            .font(.system(size: 9)).foregroundStyle(t.muted)
+                            .font(.system(size: 9, weight: .medium)).foregroundStyle(t.muted)
+                            .fixedSize()
                     }
                 }
             }
@@ -317,7 +318,7 @@ struct MetricTile: View {
 
     private var valueText: some View {
         Text(metric.format(value))
-            .font(.system(size: 16, weight: .medium).monospacedDigit())
+            .font(.system(size: 16, weight: .semibold).monospacedDigit())
             .foregroundStyle(t.text)
             .tracking(-0.3)
             .lineLimit(1).minimumScaleFactor(0.7)
@@ -353,7 +354,7 @@ struct ModelList: View {
                                 .frame(width: r.value > 0 ? max(3, g.size.width * r.value / total) : 0)
                         }
                     }
-                    .frame(height: 3)
+                    .frame(height: 4)
                 }
                 .help("\(r.name): \(metric.format(r.value))")
             }
@@ -476,7 +477,7 @@ struct AccountStats: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.system(size: 10)).foregroundStyle(t.muted)
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value).font(.system(size: 15, weight: .medium).monospacedDigit())
+                Text(value).font(.system(size: 15, weight: .semibold).monospacedDigit())
                 Text(caption).font(.system(size: 9)).foregroundStyle(t.muted)
             }
         }

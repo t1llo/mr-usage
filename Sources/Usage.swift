@@ -1,7 +1,7 @@
 // Data layer: read Claude Code's OAuth token, call the usage endpoint `/usage` uses, parse it.
 import Foundation
 
-struct Limit: Identifiable {
+struct Limit: Identifiable, Codable {
     let id: String
     let label: String
     let pct: Double
@@ -9,8 +9,8 @@ struct Limit: Identifiable {
     /// Length of the rolling window, used for the even-pace marker. Nil hides the marker.
     let window: TimeInterval?
 }
-struct Credits { let usedCents: Double; let limitCents: Double? }
-struct Usage { var limits: [Limit] = []; var credits: Credits? }
+struct Credits: Codable { let usedCents: Double; let limitCents: Double? }
+struct Usage: Codable { var limits: [Limit] = []; var credits: Credits? }
 
 enum FetchError: LocalizedError {
     case noToken
@@ -20,7 +20,7 @@ enum FetchError: LocalizedError {
         switch self {
         case .noToken: return "not logged in, run `claude` and /login"
         case .http(401, _, _): return "login expired, open Claude Code once"
-        case .http(429, _, let m): return "rate limited" + (m.map { " (\($0))" } ?? "")
+        case .http(429, _, _): return "rate limited"
         case .http(let code, _, let m): return "HTTP \(code)" + (m.map { " (\($0))" } ?? "")
         case .badJSON: return "unexpected response"
         }
@@ -71,12 +71,24 @@ func fetchUsage(token: String) async throws -> Usage {
     let http = resp as? HTTPURLResponse
     let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     if let code = http?.statusCode, code != 200 {
-        let retry = http?.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)
+        let retry = retryAfterDelay(http?.value(forHTTPHeaderField: "Retry-After"))
         let message = (json?["error"] as? [String: Any])?["message"] as? String
         throw FetchError.http(code, retryAfter: retry, message: message)
     }
     guard let json else { throw FetchError.badJSON }
     return parse(json)
+}
+
+/// Retry-After may be a delay in seconds or an HTTP date. Honor either form, including
+/// cooldowns longer than the poller's normal maximum interval.
+func retryAfterDelay(_ value: String?, now: Date = Date()) -> TimeInterval? {
+    guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+    if let seconds = Double(value) { return seconds.isFinite && seconds >= 0 ? seconds : nil }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+    return formatter.date(from: value).map { max(0, $0.timeIntervalSince(now)) }
 }
 
 func parse(_ json: [String: Any]) -> Usage {

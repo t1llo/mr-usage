@@ -37,6 +37,7 @@ final class MenuBarPanelController: NSObject {
     private var observers: [NSObjectProtocol] = []
     private var globalMonitor: Any?
     private var localMonitor: Any?
+    private var readoutKey = ""
 
     init<Content: View>(@ViewBuilder content: (MenuPanelLayout) -> Content) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -62,8 +63,9 @@ final class MenuBarPanelController: NSObject {
         layout.onResize = { [weak self] in _ = self?.updateFrame() }
         layout.onDismiss = { [weak self] in self?.hide() }
         if let button = statusItem.button {
-            button.title = "Mr. Usage"
-            button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            button.title = ""
+            button.imagePosition = .imageOnly
+            button.image = StatusItemReadout.image(provider: "Mr. Usage", limits: [])
             button.setAccessibilityLabel("Mr. Usage")
             button.target = self
             button.action = #selector(toggle)
@@ -90,11 +92,15 @@ final class MenuBarPanelController: NSObject {
         })
     }
 
-    func setTitle(_ title: String, provider: String) {
+    func setUsage(provider: String, limits: [Limit]) {
         guard let button = statusItem.button else { return }
-        button.toolTip = "Mr. Usage · \(provider)"
-        guard button.title != title else { return }
-        button.title = title
+        let description = StatusItemReadout.description(provider: provider, limits: limits)
+        let key = description + limits.prefix(2).map { "\($0.window ?? 0)/\($0.pct)" }.joined(separator: "/")
+        guard readoutKey != key else { return }
+        readoutKey = key
+        button.toolTip = description
+        button.setAccessibilityLabel(description.replacingOccurrences(of: "\n", with: ", "))
+        button.image = StatusItemReadout.image(provider: provider, limits: limits)
         // The status item can move when its text or a neighboring menu item changes width.
         DispatchQueue.main.async { [weak self] in
             if self?.panel.isVisible == true { self?.updateFrame() }

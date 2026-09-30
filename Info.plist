@@ -7,6 +7,7 @@
     <key>CFBundleName</key>              <string>Mr. Usage</string>
     <key>CFBundleDisplayName</key>       <string>Mr. Usage</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
+    <key>CFBundleIconFile</key>          <string>AppIcon</string>
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
     <key>CFBundleVersion</key>          <string>1</string>
     <key>SUFeedURL</key><string>https://github.com/t1llo/mr-usage/releases/latest/download/appcast.xml</string>

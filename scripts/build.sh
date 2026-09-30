@@ -16,6 +16,7 @@ if [ "${CONFIGURATION:-release}" = release ]; then
     xcrun strip -S "$STAGING/Contents/MacOS/ClaudeUsageBar"
 fi
 cp Info.plist "$STAGING/Contents/Info.plist"
+sh scripts/build-icons.sh "$STAGING/Contents/Resources"
 SPARKLE='.build/artifacts/sparkle/Sparkle'
 ditto "$SPARKLE/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework" "$STAGING/Contents/Frameworks/Sparkle.framework"
 cp "$SPARKLE/LICENSE" "$STAGING/Contents/Resources/Sparkle-LICENSE.txt"

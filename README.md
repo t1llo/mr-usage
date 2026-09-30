@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/app-icon-dark.png">
+  <img src="docs/assets/app-icon-light.png" alt="Mr. Usage blue turtle icon" width="96" height="96">
+</picture>
+
 # Mr. Usage
 
 A macOS menu bar app for Claude and OpenAI usage. See your plan limits, token counts,
@@ -23,7 +28,7 @@ and estimated API costs without leaving your desktop.
 
 [![Mr. Usage demo: exploring token charts, API costs, and plan limits](docs/assets/mr-usage-demo.gif)](docs/assets/mr-usage-demo.mp4)
 
-[Watch the full-quality recording](docs/assets/mr-usage-demo.mp4) · 19 seconds
+[Watch the full-quality recording](docs/assets/mr-usage-demo.mp4) · 19 seconds · native UI with sample data
 
 ## Install
 
@@ -31,7 +36,7 @@ Requires **macOS 13 or later**. Downloads support **Apple Silicon and Intel**.
 
 1. Download **Mr-Usage-macOS.dmg** from the [latest release](https://github.com/t1llo/mr-usage/releases/latest).
 2. Open it and drag **Mr. Usage.app** into **Applications**.
-3. Launch the app and click its percentages in the menu bar.
+3. Launch the app and click its turtle and usage readout in the menu bar.
 
 Published apps are Developer ID-signed and notarized by Apple. A ZIP download and
 SHA-256 checksums are also available on each release.
@@ -51,7 +56,12 @@ need a one-time manual installation of a current release.
 
 ## Using the app
 
-Choose **Claude** or **OpenAI** in the provider picker. Both have two tabs:
+Choose **Claude** or **OpenAI** in the provider picker.
+
+The menu bar labels your first two usage windows (for example, **5h 34%** and **7d 58%**),
+with small tracks showing how much is used. Hover for the provider and full window names.
+
+Both providers have two tabs:
 
 | Tab | What it shows |
 | --- | --- |
@@ -77,6 +87,8 @@ Only one instance runs at a time.
 - **Tokens:** reads local transcripts under `~/.claude/projects` and Anthropic messages
   in OpenCode's database. Repeated or streamed copies of a response are counted once.
   These counts cover this Mac, not claude.ai or other computers.
+- The last successful Claude limits and polling cooldown are kept locally across launches.
+  During throttling, cached limits retain their original update time and retries wait for the saved deadline.
 - **Costs:** uses the model's API list prices, including cache reads, 5-minute and 1-hour
   cache writes, and fast mode where recorded.
 
@@ -189,6 +201,7 @@ your own signing identity. Quit a running copy before launching a rebuild.
 swift build --product ClaudeUsageBar
 sh scripts/test-leaderboard.sh
 sh scripts/test-openai-credits.sh
+sh scripts/test-claude-polling.sh
 sh scripts/test-panel-layout.sh
 ```
 
@@ -209,14 +222,18 @@ The check fails if secrets are detected and redacts secret values from its outpu
 
 - `Sources/main.swift`, `Views.swift`, `TokensView.swift`, `Theme.swift`: app and interface.
 - `Sources/MenuBarPanel.swift`, `PanelLayout.swift`: menu-bar anchoring and content-sized popup.
+- `Sources/StatusItemReadout.swift`, `AppIcon.swift`: labeled menu-bar meters and light/dark branding.
 - `Sources/Store.swift`, `Usage.swift`: Claude limits and polling.
+- `Sources/ClaudePolling.swift`: persisted Claude snapshots and retry gates, without credentials.
 - `Sources/TokenLog.swift`, `CodexLog.swift`, `OpenCodeLog.swift`: local readers and aggregation.
 - `Sources/OpenAIUsage.swift`: ChatGPT limits and account history.
 - `Sources/Pricing.swift`: model prices and cost calculations.
 - `Sources/Leaderboard.swift`, `LeaderboardView.swift`: opt-in sharing and settings.
 - `Sources/UpdateService.swift`: Sparkle update controls.
 - `scripts/build.sh`, `scripts/sign-app.sh`: app packaging and inside-out signing.
+- `scripts/build-icons.sh`: macOS icon generation from the artwork in `docs/assets/`.
 - `scripts/test-leaderboard.sh`: isolated sharing tests.
 - `scripts/test-openai-credits.sh`: credit parsing and isolated Codex-log checks.
+- `scripts/test-claude-polling.sh`: cached limits, restart-safe cooldowns and Retry-After checks.
 - `scripts/test-panel-layout.sh`: native popup resizing and interaction checks.
 - `scripts/make-cert.sh`: optional self-signed identity for local development.

@@ -117,7 +117,7 @@ struct PanelToolbarButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(selected ? t.accent : hovered ? t.text : t.muted)
             .frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -134,7 +134,7 @@ struct PanelActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(size: 12, weight: .semibold))
             .padding(.horizontal, 12).padding(.vertical, 8)
             .foregroundStyle(enabled ? t.accent : t.muted)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -165,7 +165,7 @@ struct ThemePicker: View {
                             .overlay(Circle().fill(theme.accent).frame(width: 7, height: 7))
                             .frame(width: 28, height: 22)
                         .accessibilityHidden(true)
-                        Text(theme.name).font(.system(size: 12, weight: .medium))
+                        Text(theme.name).font(.system(size: 12, weight: .semibold))
                         Spacer(minLength: 0)
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .semibold))
@@ -200,19 +200,31 @@ struct Segmented<T: Hashable>: View {
         HStack(spacing: isTabBar ? 18 : 2) {
             ForEach(options, id: \.self) { o in
                 let selected = showsSelection && o == selection
-                Button { selection = o } label: {
+                Button {
+                    if isTabBar {
+                        // Native window sizing is immediate. A tab change must use the same
+                        // transaction rather than morphing the old page into the new frame.
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { selection = o }
+                    } else { selection = o }
+                } label: {
                     Text(label(o))
-                        .font(.system(size: isTabBar ? 12 : 10, weight: selected ? .medium : .regular))
+                        .font(.system(size: isTabBar ? 12 : 10, weight: selected ? .semibold : .medium))
                         .foregroundStyle(selected ? t.text : t.muted)
                         .padding(.vertical, isTabBar ? 8 : 5)
                         .padding(.horizontal, isTabBar ? 2 : 9)
                         .frame(maxWidth: fill ? .infinity : nil)
                         .background(alignment: isTabBar ? .bottom : .center) {
                             if selected {
-                                RoundedRectangle(cornerRadius: isTabBar ? 1 : 6, style: .continuous)
-                                    .fill(isTabBar ? t.accent.opacity(0.85) : t.text.opacity(0.085))
-                                    .frame(height: isTabBar ? 2 : nil)
-                                    .matchedGeometryEffect(id: "selection", in: ns)
+                                if isTabBar {
+                                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                                        .fill(t.accent.opacity(0.85)).frame(height: 2)
+                                } else {
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(t.text.opacity(0.085))
+                                        .matchedGeometryEffect(id: "selection", in: ns)
+                                }
                             }
                         }
                         .contentShape(Rectangle())
@@ -227,6 +239,39 @@ struct Segmented<T: Hashable>: View {
         .overlay(alignment: .bottom) {
             if isTabBar { Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5) }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: selection)
+        .animation(isTabBar || reduceMotion ? nil : .easeOut(duration: 0.18), value: selection)
+    }
+}
+
+/// Unlike the native macOS disclosure's tiny chevron, this whole row is a button.
+/// Expansion is immediate so measured content and the native viewport stay in step.
+struct PanelDisclosure<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+    @State private var expanded = false
+    @Environment(\.theme) private var t
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Text(title).font(.system(size: 11, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(t.subtext)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            if expanded { content.padding(.top, 6).transition(.identity) }
+        }
     }
 }

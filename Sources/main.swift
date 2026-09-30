@@ -24,6 +24,7 @@ struct ClaudeUsageBarApp: App {
 final class MrUsageAppDelegate: NSObject, NSApplicationDelegate {
     private var menu: MenuBarPanelController?
     private var subscriptions: Set<AnyCancellable> = []
+    private var appearanceObserver: NSKeyValueObservation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let store = Store()
@@ -35,13 +36,19 @@ final class MrUsageAppDelegate: NSObject, NSApplicationDelegate {
         self.menu = menu
         let updateTitle = { [weak menu] in
             let provider = UserDefaults.standard.string(forKey: "provider").flatMap(Provider.init(rawValue:)) ?? .claude
-            menu?.setTitle(provider == .claude ? store.menuTitle : tokens.menuTitle(), provider: provider.rawValue)
+            let limits = provider == .claude ? store.usage?.limits : tokens.codexLimits?.current(now: Date()).limits
+            menu?.setUsage(provider: provider.rawValue, limits: limits ?? [])
         }
         Publishers.Merge(store.objectWillChange, tokens.objectWillChange)
             .receive(on: DispatchQueue.main).sink(receiveValue: updateTitle).store(in: &subscriptions)
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: DispatchQueue.main).sink { _ in updateTitle() }.store(in: &subscriptions)
         updateTitle()
+        appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.initial, .new]) { app, _ in
+            Task { @MainActor in
+                NSApp.applicationIconImage = AppBranding.icon(isDark: app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+            }
+        }
         UpdateService.shared.start()
     }
 }

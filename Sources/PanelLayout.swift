@@ -43,10 +43,12 @@ struct PanelViewport<Header: View, Content: View, Footer: View>: View {
                     .measurePanelHeight(page)
             }
             .id(page)
+            .transition(.identity)
             footer.fixedSize(horizontal: false, vertical: true).measurePanelHeight("footer")
         }
         .padding(14)
         .frame(width: MenuPanelLayout.width, height: height, alignment: .top)
+        .animation(nil, value: page)
         .onPreferenceChange(PanelHeights.self) { values in
             let measured = values.filter { $0.value >= 0 && $0.value.isFinite }
             if measured.contains(where: { heights[$0.key] != $0.value }) {

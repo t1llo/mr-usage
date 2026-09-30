@@ -112,8 +112,8 @@ struct UsagePanel: View {
                     LeaderboardSettingsView(leaderboard: leaderboard)
                 } else {
                     tabContent
-                    if provider == .claude, store.usage != nil, let e = store.lastError, !store.inFlight {
-                        ErrorBanner(text: "Couldn't refresh: \(e). Retrying at \(clock(store.nextFetchAt)).")
+                    if provider == .claude, store.usage != nil, store.lastError != nil, !store.inFlight {
+                        ErrorBanner(text: store.status)
                     }
                 }
             }
@@ -122,6 +122,7 @@ struct UsagePanel: View {
         }
         .background(background)
         .foregroundStyle(t.text)
+        .fontWeight(.medium)
         .tint(t.accent)
         .environment(\.theme, t)
         .environment(\.colorScheme, t.isDark ? .dark : .light)
@@ -162,7 +163,8 @@ struct UsagePanel: View {
     private var header: some View {
         HStack(spacing: 8) {
             if showingSettings {
-                Text("Settings").font(.system(size: 15, weight: .medium))
+                AppIcon().frame(width: 24, height: 24)
+                Text("Settings").font(.system(size: 15, weight: .semibold))
             } else {
                 providerPicker
             }
@@ -212,10 +214,8 @@ struct UsagePanel: View {
     private var providerPicker: some View {
         Button { picking.toggle() } label: {
             HStack(spacing: 8) {
-                Image(systemName: provider.icon)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(t.subtext)
-                Text(provider.rawValue).font(.system(size: 15, weight: .medium)).tracking(-0.3)
+                AppIcon().frame(width: 24, height: 24)
+                Text(provider.rawValue).font(.system(size: 15, weight: .semibold)).tracking(-0.3)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .medium))
                     .foregroundStyle(t.muted)
@@ -233,7 +233,7 @@ struct UsagePanel: View {
                         HStack(spacing: 8) {
                             Image(systemName: p.icon).foregroundStyle(t.subtext).frame(width: 16)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(p.rawValue).font(.system(size: 12, weight: .medium))
+                                Text(p.rawValue).font(.system(size: 12, weight: .semibold))
                                 Text(p.detail).font(.caption).foregroundStyle(t.muted)
                             }
                             Spacer(minLength: 12)
@@ -272,7 +272,13 @@ struct UsagePanel: View {
 
     @ViewBuilder private func claudeLimits(now: Date) -> some View {
         if let u = store.usage {
-            limitCards(u, now: now)
+            VStack(alignment: .leading, spacing: 10) {
+                limitCards(u, now: now)
+                if let at = store.lastGoodAt {
+                    Text("Updated \(dayClock(at))").font(.system(size: 10)).foregroundStyle(t.muted)
+                        .frame(maxWidth: .infinity)
+                }
+            }
         } else {
             EmptyState(loading: store.inFlight, text: store.status)
         }
@@ -451,16 +457,16 @@ struct SessionCard: View {
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text("\(Int(limit.pct))")
-                        .font(.system(size: 38, weight: .medium).monospacedDigit())
+                        .font(.system(size: 38, weight: .semibold).monospacedDigit())
                         .tracking(-1.5)
                         .contentTransition(.numericText())
                     Text("%")
-                        .font(.system(size: 22, weight: .regular))
+                        .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(t.muted)
                     Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(limit.resetsAt == nil ? "Ready" : remaining(to: limit.resetsAt, now: now))
-                            .font(.system(size: 13, weight: .medium).monospacedDigit())
+                            .font(.system(size: 13, weight: .semibold).monospacedDigit())
                             .foregroundStyle(t.subtext)
                         Text(limit.resetsAt == nil ? "No active session" : "until reset")
                             .font(.system(size: 10)).foregroundStyle(t.muted)
@@ -496,12 +502,12 @@ struct LimitMeter: View {
                 if let marker {
                     RoundedRectangle(cornerRadius: 0.5)
                         .fill(t.text.opacity(0.55))
-                        .frame(width: 1, height: 9)
+                        .frame(width: 1.5, height: 11)
                         .position(x: max(1, min(g.size.width - 1, g.size.width * marker)), y: g.size.height / 2)
                 }
             }
         }
-        .frame(height: 4)
+        .frame(height: 6)
     }
 }
 
@@ -519,7 +525,7 @@ struct OpenAICreditsCard: View {
                     .foregroundStyle(t.subtext)
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(credits.displayBalance)
-                        .font(.system(size: 28, weight: .medium).monospacedDigit())
+                        .font(.system(size: 28, weight: .semibold).monospacedDigit())
                         .tracking(-0.6)
                         .foregroundStyle(t.text)
                         .contentTransition(.numericText())
@@ -550,10 +556,10 @@ struct BarRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
-                Text(label).font(.system(size: 12)).foregroundStyle(t.subtext)
+                Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(t.subtext)
                 Spacer()
                 Text(value)
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     .contentTransition(.numericText())
             }
             LimitMeter(pct: pct, marker: pace?.elapsed)

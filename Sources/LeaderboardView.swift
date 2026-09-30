@@ -13,7 +13,7 @@ struct LeaderboardSettingsView: View {
             Card {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Leaderboard")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 14, weight: .semibold))
                     Text("Choose the name people see next to your usage.")
                         .font(.caption).foregroundStyle(t.subtext).fixedSize(horizontal: false, vertical: true)
                     VStack(alignment: .leading, spacing: 5) {
@@ -88,7 +88,7 @@ struct LeaderboardSettingsView: View {
             Text("Sends your display name and daily token counts, grouped by provider, model and billing category, to \((website ?? LeaderboardConfiguration.origin).host ?? "the leaderboard"). Includes OpenCode and OpenAI All devices totals.")
                 .foregroundStyle(t.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            DisclosureGroup {
+            PanelDisclosure(title: "Exactly what gets shared") {
                 VStack(alignment: .leading, spacing: 12) {
                     sharingDetail("Uploaded fields", """
                     • Your chosen display name.
@@ -106,13 +106,7 @@ struct LeaderboardSettingsView: View {
                     sharingDetail("History and removal", "Syncs about every 5 minutes. Starts with the last 30 UTC days and retains older daily totals for all-time rankings. Providers set to Not shared are excluded. Turning sharing off requests deletion of your profile and uploaded totals; offline removals retry when connected.")
                     sharingDetail("Not uploaded", "Prompts, responses, code, file or project paths, session or request IDs, provider API keys or login tokens, plan limits, credit balances, or payment details.")
                 }
-                .padding(.top, 8)
-            } label: {
-                Text("Exactly what gets shared")
-                    .fontWeight(.medium)
-                    .foregroundStyle(t.subtext)
             }
-            .tint(t.accent)
         }
         .font(.system(size: 11))
     }

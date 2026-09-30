@@ -252,12 +252,6 @@ extension TokenStore {
         guard loaded && checkedAccount else { return }
         sharingSnapshot = TokenSnapshot(local: records, account: estimatedAccountRecords)
     }
-
-    /// Menu bar text for OpenAI: the Codex windows' percentages, or "OpenAI" without a snapshot.
-    func menuTitle(now: Date = Date()) -> String {
-        guard let u = codexLimits?.current(now: now), !u.limits.isEmpty else { return "OpenAI" }
-        return u.limits.prefix(2).map { "\(Int($0.pct))%" }.joined(separator: " · ")
-    }
 }
 
 // MARK: - Aggregation

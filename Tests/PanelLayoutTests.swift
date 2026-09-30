@@ -12,6 +12,7 @@ private final class Fixture: ObservableObject {
     @Published var name = ""
     var popoverVisible = false
     var renderedSize = CGSize.zero
+    var detailsVisible = false
 }
 
 private struct RenderedSize: PreferenceKey {
@@ -34,17 +35,37 @@ private struct FixtureView: View {
                     .focused($editing).frame(height: 68)
                     .onAppear { editing = true }
             } else {
-                Button("Switch provider") { fixture.picking = true }
-                    .frame(height: 68)
-                    .popover(isPresented: $fixture.picking, arrowEdge: .bottom) {
-                        Text("Claude · OpenAI")
-                            .padding(20)
-                            .onAppear { fixture.popoverVisible = true }
-                            .onDisappear { fixture.popoverVisible = false }
-                    }
+                VStack(spacing: 12) {
+                    Button("Switch provider") { fixture.picking = true }
+                        .frame(height: 28)
+                        .popover(isPresented: $fixture.picking, arrowEdge: .bottom) {
+                            Text("Claude · OpenAI")
+                                .padding(20)
+                                .onAppear { fixture.popoverVisible = true }
+                                .onDisappear { fixture.popoverVisible = false }
+                        }
+                    Segmented(options: ["Limits", "Tokens"], selection: Binding(
+                        get: { fixture.fitsContent ? "Limits" : "Tokens" },
+                        set: {
+                            fixture.page = "Claude/\($0)"
+                            fixture.fitsContent = $0 == "Limits"
+                            fixture.contentHeight = fixture.fitsContent ? 180 : 1100
+                        }), fill: true, isTabBar: true) { $0 }
+                        .frame(height: 28)
+                }
             }
         } content: {
-            Color.blue.frame(height: fixture.contentHeight)
+            VStack(alignment: .leading, spacing: 0) {
+                if fixture.page == "settings" {
+                    PanelDisclosure(title: "Exactly what gets shared") {
+                        Text("Uploaded fields: synthetic daily token counts")
+                            .frame(height: 80)
+                            .onAppear { fixture.detailsVisible = true }
+                            .onDisappear { fixture.detailsVisible = false }
+                    }
+                }
+                Color.blue.frame(height: fixture.contentHeight)
+            }
         } footer: {
             Text("Footer").frame(height: 16)
         }
@@ -114,17 +135,36 @@ struct PanelLayoutTests {
             fixture.picking = false
             fixture.page = "OpenAI/Limits"
             fixture.contentHeight = 900
-            menu.setTitle("100% · 100%", provider: "OpenAI")
+            menu.setUsage(provider: "OpenAI", limits: [
+                Limit(id: "session", label: "Session", pct: 100, resetsAt: nil, window: 18000),
+                Limit(id: "week", label: "Weekly", pct: 100, resetsAt: nil, window: 604800)])
             try check(menu.layout.maximumHeight)
             fixture.picking = true
             try wait("Provider popover must reopen") { fixture.popoverVisible }
             fixture.picking = false
             fixture.page = "Claude/Limits"
             fixture.contentHeight = 180
-            menu.setTitle(index % 2 == 0 ? "1% · 2%" : "Claude", provider: "Claude")
+            menu.setUsage(provider: "Claude", limits: index % 2 == 0 ? [
+                Limit(id: "session", label: "Session", pct: 1, resetsAt: nil, window: 18000),
+                Limit(id: "week", label: "Weekly", pct: 2, resetsAt: nil, window: 604800)] : [])
             try check(316)
         }
         print("PASS: repeated tall/short provider switches, nested popovers, exact native size and menu-bar anchoring")
+
+        for _ in 0..<6 {
+            click(NSPoint(x: 240, y: menu.panel.frame.height - 68), in: menu.panel)
+            try wait("Clicking Tokens must select the page") { fixture.page == "Claude/Tokens" }
+            try check(menu.layout.maximumHeight)
+            click(NSPoint(x: 75, y: menu.panel.frame.height - 68), in: menu.panel)
+            try wait("Clicking Limits must select the page") { fixture.page == "Claude/Limits" }
+            try check(316)
+        }
+        let custom = Limit(id: "custom", label: "Custom session", pct: 34, resetsAt: nil, window: 10800)
+        assert(StatusItemReadout.shortWindow(custom) == "3h", "Use server-defined windows in the menu bar")
+        menu.setUsage(provider: "OpenAI", limits: [custom])
+        assert(menu.statusItem.button!.image!.isTemplate)
+        assert(menu.statusItem.button!.toolTip!.contains("Custom session: 34% used"))
+        print("PASS: real Limits/Tokens buttons, repeated page resizing and labeled template menu-bar readouts")
 
         fixture.page = "Claude/Tokens"
         fixture.fitsContent = false
@@ -136,6 +176,13 @@ struct PanelLayoutTests {
         try wait("Settings text field must receive keyboard focus") { menu.panel.firstResponder is NSTextView }
         sendKey("a", code: 0, to: menu.panel)
         try wait("Typing in the nonactivating panel must edit the profile field") { fixture.name == "a" }
+        // Click the text well away from the chevron: the entire sharing-details row is active.
+        click(NSPoint(x: 170, y: menu.panel.frame.height - 108), in: menu.panel)
+        try wait("Clicking sharing-details text must expand it") { fixture.detailsVisible }
+        try check(menu.layout.maximumHeight)
+        click(NSPoint(x: 170, y: menu.panel.frame.height - 108), in: menu.panel)
+        try wait("Clicking sharing-details text again must collapse it") { !fixture.detailsVisible }
+        print("PASS: sharing disclosure expands and collapses by clicking its label")
         fixture.page = "Claude/Limits"
         fixture.fitsContent = true
         fixture.contentHeight = 180
@@ -169,6 +216,14 @@ struct PanelLayoutTests {
                                     windowNumber: window.windowNumber, context: nil, characters: characters,
                                     charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
         NSApp.sendEvent(event)
+    }
+
+    @MainActor private static func click(_ point: NSPoint, in window: NSWindow) {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            NSApp.sendEvent(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                              timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                              context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!)
+        }
     }
 
     @MainActor private static func wait(_ message: String, until condition: () -> Bool) throws {
