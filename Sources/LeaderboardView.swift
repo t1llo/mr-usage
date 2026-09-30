@@ -92,7 +92,7 @@ struct LeaderboardSettingsView: View {
                     sharingDetail("Connection data", "A random, leaderboard-only authentication token, data-format version and sharing-consent flag are also sent. Requests include an app identifier; the server also sees your IP address.")
                     sharingDetail("Shown publicly", "Your name, rank, total tokens, estimated API value/spend, tools used, active days, recent daily usage and last sync time. The website calculates dollar estimates from the counts; these are not subscription charges or verified bills.")
                     sharingDetail("History and removal", "Syncs about every 5 minutes. Starts with the last 30 UTC days and retains older daily totals for all-time rankings. Tools set to Not shared are excluded. Turning sharing off requests deletion of your profile and uploaded totals; offline removals retry when connected.")
-                    sharingDetail("Not uploaded", "Prompts, responses, code, file or project paths, session or request IDs, provider API keys or login tokens, plan limits, payment details, OpenCode usage, or ChatGPT All devices estimates.")
+                    sharingDetail("Not uploaded", "Prompts, responses, code, file or project paths, session or request IDs, provider API keys or login tokens, plan limits, credit balances, payment details, OpenCode usage, or ChatGPT All devices estimates.")
                 }
                 .padding(.top, 8)
             } label: {

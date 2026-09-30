@@ -3,7 +3,7 @@
 ## Build and verification
 
 - Build on macOS with `./scripts/build.sh`: Swift Package Manager compiles `Sources/*.swift` targeting macOS 13 with pinned Sparkle 2.10.0, then packages `build/Mr. Usage.app` and signs its nested helpers inside out.
-- Fast verification: `swift build --product ClaudeUsageBar`. Run isolated leaderboard tests with `sh scripts/test-leaderboard.sh` when present.
+- Fast verification: `swift build --product ClaudeUsageBar`. Run isolated tests with `sh scripts/test-leaderboard.sh` and `sh scripts/test-openai-credits.sh` when present.
 - Launch with `open 'build/Mr. Usage.app'`. Quit the running app before checking a rebuild: `Sources/main.swift` rejects additional instances to prevent duplicate polling.
 - Local builds are ad-hoc signed. Distribution builds use `MR_USAGE_UNIVERSAL=1` and `MR_USAGE_SIGN_IDENTITY`. Credentials and Sparkle private keys stay in Keychain; only public verification keys belong in this repository.
 
@@ -24,4 +24,4 @@
 - `Sources/OpenCodeLog.swift` queries all `opencode*.db` files through SQLite to include WAL data. Its read-write fallback only runs SELECTs but allows missing WAL/SHM files to be recreated.
 - `TokenRecord.input` excludes cache reads/writes; output includes reasoning. Codex requires subtracting cached/write input; OpenCode requires adding reasoning to output. Costs are recomputed from `Sources/Pricing.swift` in USD; unknown models remain unpriced, not guessed.
 - Limit order matters: `Sources/Views.swift` puts the first limit in the session card, and menu titles show the first two. Pace uses `Limit.window` in seconds; OpenAI windows are server-defined.
-- Live usage is already a percentage; plan-history basis points divide by 100. Extra-usage credits are cents, unlike token API costs in USD.
+- Live usage is already a percentage; plan-history basis points divide by 100. Claude extra-usage credits are cents, unlike token API costs in USD. OpenAI credit balances are credit units; preserve their own snapshot time when newer limit snapshots omit credits.

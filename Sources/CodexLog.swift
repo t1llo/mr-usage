@@ -13,6 +13,9 @@ struct CodexLimits {
     let usage: Usage
     let plan: String?
     let live: Bool
+    let credits: CodexCredits?
+
+    var hasData: Bool { !usage.limits.isEmpty || credits != nil }
 }
 
 actor CodexScanner {
@@ -56,6 +59,7 @@ actor CodexScanner {
     /// child's file, so the same key can appear in several files.
     private var records: [String: TokenRecord] = [:]
     private var limits: (date: Date, json: [String: Any])?
+    private var creditBalance: CodexCredits?
     private let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -89,7 +93,9 @@ actor CodexScanner {
             }
         }
         records = records.filter { $0.value.date >= cutoff }
-        return (Array(records.values), limits.flatMap(parseLimits), found)
+        return (Array(records.values), limits.flatMap {
+            parseCodexLogLimits($0.json, asOf: $0.date, lastCredits: creditBalance)
+        }, found)
     }
 
     private func read(_ url: URL, state st: inout FileState) -> UInt64 {
@@ -137,7 +143,13 @@ actor CodexScanner {
             if let rl = p["rate_limits"] as? [String: Any] {
                 // Other buckets (per-model or "codex_other") share the event; the plan's is "codex".
                 let id = rl["limit_id"] as? String
-                if id == nil || id == "codex", date >= (limits?.date ?? .distantPast) { limits = (date, rl) }
+                if id == nil || id == "codex" {
+                    if date >= (limits?.date ?? .distantPast) { limits = (date, rl) }
+                    if date >= (creditBalance?.asOf ?? .distantPast),
+                       let credits = parseCodexCredits(rl["credits"], asOf: date, live: false) {
+                        creditBalance = credits
+                    }
+                }
             }
             guard let info = p["info"] as? [String: Any] else { return }
             let total = Tokens(info["total_token_usage"] as? [String: Any])
@@ -164,19 +176,20 @@ actor CodexScanner {
             input: input, output: output, cacheWrite: u.cacheWrite, cacheRead: u.cached,
             cost: openAICost(model: model, input: input, output: output, cacheWrite: u.cacheWrite, cacheRead: u.cached))
     }
+}
 
-    private func parseLimits(_ l: (date: Date, json: [String: Any])) -> CodexLimits? {
-        var usage = Usage()
-        for key in ["primary", "secondary"] {
-            guard let w = l.json[key] as? [String: Any], let pct = w["used_percent"] as? Double else { continue }
-            let minutes = w["window_minutes"] as? Int
-            let reset = (w["resets_at"] as? Double).map { Date(timeIntervalSince1970: $0) }
-            usage.limits.append(Limit(id: "codex_\(key)", label: windowLabel(minutes), pct: pct,
-                                      resetsAt: reset, window: minutes.map { TimeInterval($0 * 60) }))
-        }
-        guard !usage.limits.isEmpty else { return nil }
-        return CodexLimits(asOf: l.date, usage: usage, plan: l.json["plan_type"] as? String, live: false)
+func parseCodexLogLimits(_ json: [String: Any], asOf: Date, lastCredits: CodexCredits? = nil) -> CodexLimits? {
+    var usage = Usage()
+    for key in ["primary", "secondary"] {
+        guard let w = json[key] as? [String: Any], let pct = w["used_percent"] as? Double else { continue }
+        let minutes = w["window_minutes"] as? Int
+        let reset = (w["resets_at"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        usage.limits.append(Limit(id: "codex_\(key)", label: windowLabel(minutes), pct: pct,
+                                  resetsAt: reset, window: minutes.map { TimeInterval($0 * 60) }))
     }
+    let limits = CodexLimits(asOf: asOf, usage: usage, plan: json["plan_type"] as? String, live: false,
+                             credits: parseCodexCredits(json["credits"], asOf: asOf, live: false) ?? lastCredits)
+    return limits.hasData ? limits : nil
 }
 
 /// Codex's windows are set by the server; name them by length the way Codex's own TUI does.

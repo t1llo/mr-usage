@@ -118,6 +118,10 @@ final class TokenStore: ObservableObject {
         guard let live = liveLimits else { return loggedLimits }
         return (loggedLimits?.asOf ?? .distantPast) > live.asOf ? loggedLimits : live
     }
+    /// A rate-limit snapshot can omit credits; use the newest balance that is actually present.
+    var codexCredits: CodexCredits? {
+        [liveLimits?.credits, loggedLimits?.credits].compactMap { $0 }.max { $0.asOf < $1.asOf }
+    }
     @Published private(set) var liveLimits: CodexLimits?
     @Published private(set) var loggedLimits: CodexLimits?
     /// Why the live fetch is not working, shown under the limits. Nil when it works or when
@@ -199,8 +203,8 @@ final class TokenStore: ObservableObject {
                     nextHistoryAt = Date().addingTimeInterval(600)
                 }
                 let live = try await fetchCodexLimits(auth)
-                liveLimits = live.usage.limits.isEmpty ? nil : live
-                liveError = live.usage.limits.isEmpty ? "no limits for this account" : nil
+                liveLimits = live.hasData ? live : nil
+                liveError = live.hasData ? nil : "no limits or credits for this account"
             } catch {
                 liveError = error.localizedDescription
                 if let fe = error as? FetchError, fe.isTransient {

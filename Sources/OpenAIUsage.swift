@@ -78,6 +78,40 @@ func fetchCodexLimits(_ auth: CodexAuth) async throws -> CodexLimits {
     parseCodexUsage(try await chatGPTGet("usage", auth))
 }
 
+/// OpenAI usage credits, not dollars or Claude's extra-usage cents. Keep their own
+/// capture time because a newer rate-limit snapshot can omit the credit balance.
+struct CodexCredits {
+    let asOf: Date
+    let live: Bool
+    let hasCredits: Bool
+    let unlimited: Bool
+    let balance: Double?
+
+    var displayBalance: String {
+        if unlimited { return "Unlimited" }
+        guard let balance else { return hasCredits ? "Available" : "Unavailable" }
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.maximumFractionDigits = 2
+        return f.string(from: NSNumber(value: balance)) ?? String(balance)
+    }
+}
+
+func parseCodexCredits(_ any: Any?, asOf: Date, live: Bool) -> CodexCredits? {
+    guard let c = any as? [String: Any], let has = c["has_credits"] as? Bool,
+          let unlimited = c["unlimited"] as? Bool else { return nil }
+    let balance: Double?
+    if let text = c["balance"] as? String {
+        balance = Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    } else if let number = c["balance"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+        balance = number.doubleValue
+    } else {
+        balance = nil
+    }
+    return CodexCredits(asOf: asOf, live: live, hasCredits: has, unlimited: unlimited,
+                        balance: balance.flatMap { $0.isFinite ? $0 : nil })
+}
+
 func parseCodexUsage(_ json: [String: Any], now: Date = Date()) -> CodexLimits {
     var usage = Usage()
     let rl = json["rate_limit"] as? [String: Any]
@@ -89,7 +123,8 @@ func parseCodexUsage(_ json: [String: Any], now: Date = Date()) -> CodexLimits {
         usage.limits.append(Limit(id: "codex_\(key)", label: windowLabel(minutes), pct: pct, resetsAt: reset,
                                   window: secs > 0 ? secs : nil))
     }
-    return CodexLimits(asOf: now, usage: usage, plan: json["plan_type"] as? String, live: true)
+    return CodexLimits(asOf: now, usage: usage, plan: json["plan_type"] as? String, live: true,
+                       credits: parseCodexCredits(json["credits"], asOf: now, live: true))
 }
 
 // MARK: - Plan history

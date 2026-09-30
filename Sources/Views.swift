@@ -280,6 +280,7 @@ struct UsagePanel: View {
         if let cx = tokens.codexLimits {
             VStack(alignment: .leading, spacing: 10) {
                 limitCards(cx.current(now: now), now: now)
+                if let credits = tokens.codexCredits { OpenAICreditsCard(credits: credits) }
                 Text([cx.plan.map { "ChatGPT " + planName($0) }, cx.live ? "live" : "from Codex logs, \(dayClock(cx.asOf))"]
                         .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption2).foregroundStyle(t.muted)
@@ -511,6 +512,37 @@ struct RingGauge: View {
                 .animation(.easeOut(duration: 0.7), value: pct)
         }
         .padding(lineWidth / 2)
+    }
+}
+
+// MARK: - OpenAI credits
+
+struct OpenAICreditsCard: View {
+    let credits: CodexCredits
+    @Environment(\.theme) private var t
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 7) {
+                Label("Credit balance", systemImage: "creditcard.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(t.subtext)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(credits.displayBalance)
+                        .font(.system(size: 23, weight: .semibold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(t.accent)
+                        .contentTransition(.numericText())
+                    if !credits.unlimited, credits.balance != nil {
+                        Text("credits").font(.caption).foregroundStyle(t.subtext)
+                    }
+                }
+                Text("Used after your plan's included usage.")
+                    .font(.caption).foregroundStyle(t.muted)
+                Text("\(credits.live ? "Updated" : "From Codex logs ·") \(dayClock(credits.asOf))")
+                    .font(.caption2).foregroundStyle(t.muted)
+            }
+        }
+        .help("OpenAI usage credits, including grants reflected in your balance. Separate from estimated API costs.")
     }
 }
 

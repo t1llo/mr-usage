@@ -12,6 +12,7 @@ and estimated API costs without leaving your desktop.
   with reset countdowns and markers showing your pace through each window.
 - **Token charts** with input, output, cache reads, cache writes, and a per-model breakdown.
 - **API-equivalent costs** calculated from published model prices, separate from your subscription bill.
+- **OpenAI credit balance** for additional usage, including promotional credits reported by your account.
 - **Local usage** from Claude Code, Codex, and OpenCode, plus an OpenAI **All devices** view.
 - **Three themes:** Tokyo Night, Catppuccin Mocha, and Catppuccin Latte.
 - **Optional leaderboard sharing** at [usage.beffa.xyz](https://usage.beffa.xyz), off by default.
@@ -81,6 +82,10 @@ Only one instance runs at a time.
   `~/.codex/auth.json`), then OpenCode's ChatGPT OAuth token. If live limits are unavailable,
   the app can show Codex's most recent logged snapshot with its timestamp. Windows whose
   reset time has passed are cleared.
+- **Credits:** displays OpenAI's usage-credit balance in the Limits tab, including granted
+  credits reflected in that balance. Credits are used after included plan usage and are shown
+  in credit units. The newest available live or logged balance is shown with its timestamp;
+  this is separate from dollar-denominated API cost estimates.
 - **This Mac:** counts Codex session and archived-session logs plus OpenAI messages in
   OpenCode's database. Per-response records take precedence over running totals; copied
   responses and forked OpenCode sessions are deduplicated.
@@ -133,7 +138,7 @@ using its own versioned prices, which can differ from the app's per-response est
 Neither board represents a verified invoice or subscription bill.
 
 **Never uploaded:** prompts, conversations, source code, provider API keys or OAuth tokens,
-project paths, session IDs, plan limits, or payment details. OpenCode usage and OpenAI
+project paths, session IDs, plan limits, credit balances, or payment details. OpenCode usage and OpenAI
 **All devices** estimates are excluded; sharing uses exact Claude Code and Codex local logs.
 
 The first sync includes the most recent **30 UTC days**. Older shared daily aggregates
@@ -170,6 +175,7 @@ your own signing identity. Quit a running copy before launching a rebuild.
 ```sh
 swift build --product ClaudeUsageBar
 sh scripts/test-leaderboard.sh
+sh scripts/test-openai-credits.sh
 ```
 
 Leaderboard tests use synthetic counts and temporary state, not provider logs. To also
@@ -193,4 +199,5 @@ The check fails if secrets are detected and redacts secret values from its outpu
 - `Sources/UpdateService.swift`: Sparkle update controls.
 - `scripts/build.sh`, `scripts/sign-app.sh`: app packaging and inside-out signing.
 - `scripts/test-leaderboard.sh`: isolated sharing tests.
+- `scripts/test-openai-credits.sh`: credit parsing and isolated Codex-log checks.
 - `scripts/make-cert.sh`: optional self-signed identity for local development.
