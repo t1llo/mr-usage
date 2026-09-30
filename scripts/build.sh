@@ -16,6 +16,11 @@ if [ "${CONFIGURATION:-release}" = release ]; then
     xcrun strip -S "$STAGING/Contents/MacOS/ClaudeUsageBar"
 fi
 cp Info.plist "$STAGING/Contents/Info.plist"
+# Match release build-number ordering so Sparkle cannot replace a fresh local build
+# with an older published binary. The release publisher stamps signed builds separately.
+if [ "${MR_USAGE_SIGN_IDENTITY:--}" = - ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(date -u +%Y%m%d%H%M%S)" "$STAGING/Contents/Info.plist"
+fi
 sh scripts/build-icons.sh "$STAGING/Contents/Resources"
 SPARKLE='.build/artifacts/sparkle/Sparkle'
 ditto "$SPARKLE/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework" "$STAGING/Contents/Frameworks/Sparkle.framework"

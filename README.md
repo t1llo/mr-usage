@@ -36,7 +36,7 @@ Requires **macOS 13 or later**. Downloads support **Apple Silicon and Intel**.
 
 1. Download **Mr-Usage-macOS.dmg** from the [latest release](https://github.com/t1llo/mr-usage/releases/latest).
 2. Open it and drag **Mr. Usage.app** into **Applications**.
-3. Launch the app and click its turtle and usage readout in the menu bar.
+3. Launch the app and click its usage readout in the menu bar.
 
 Published apps are Developer ID-signed and notarized by Apple. A ZIP download and
 SHA-256 checksums are also available on each release.

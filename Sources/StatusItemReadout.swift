@@ -13,15 +13,12 @@ enum StatusItemReadout {
             width(label, font: labelFont) + 4 + width(value, font: valueFont)
         }
         let fallbackWidth = width(provider, font: valueFont)
-        let total = ceil(24 + (windows.isEmpty ? fallbackWidth : widths.reduce(0, +) + CGFloat(max(0, windows.count - 1)) * 10))
-        let turtle = NSImage(systemSymbolName: "tortoise.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(paletteColors: [.black]))
+        let total = ceil(windows.isEmpty ? fallbackWidth : widths.reduce(0, +) + CGFloat(max(0, windows.count - 1)) * 10)
         let image = NSImage(size: NSSize(width: total, height: 22), flipped: false) { _ in
-            turtle?.draw(in: NSRect(x: 0, y: 4, width: 18, height: 14))
             if windows.isEmpty {
-                draw(provider, at: NSPoint(x: 24, y: 4), font: valueFont)
+                draw(provider, at: NSPoint(x: 0, y: 4), font: valueFont)
             } else {
-                var x: CGFloat = 24
+                var x: CGFloat = 0
                 for index in windows.indices {
                     draw(labels[index], at: NSPoint(x: x, y: 7), font: labelFont, opacity: 0.7)
                     draw(values[index], at: NSPoint(x: x + width(labels[index], font: labelFont) + 4, y: 5), font: valueFont)

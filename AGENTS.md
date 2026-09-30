@@ -6,7 +6,7 @@
 - Fast verification: `swift build --product ClaudeUsageBar`. Run isolated tests with `sh scripts/test-leaderboard.sh` and `sh scripts/test-openai-credits.sh` when present.
 - Run `sh scripts/test-panel-layout.sh` from a logged-in macOS desktop for native popup changes. It opens a synthetic panel and uses no provider credentials or logs.
 - Launch with `open 'build/Mr. Usage.app'`. Quit the running app before checking a rebuild: `Sources/main.swift` rejects additional instances to prevent duplicate polling.
-- Local builds are ad-hoc signed. Distribution builds use `MR_USAGE_UNIVERSAL=1` and `MR_USAGE_SIGN_IDENTITY`. Credentials and Sparkle private keys stay in Keychain; only public verification keys belong in this repository.
+- Local builds are ad-hoc signed and timestamp their build number so Sparkle does not replace them with an older release. Distribution builds use `MR_USAGE_UNIVERSAL=1` and `MR_USAGE_SIGN_IDENTITY`. Credentials and Sparkle private keys stay in Keychain; only public verification keys belong in this repository.
 
 ## Runtime invariants
 
