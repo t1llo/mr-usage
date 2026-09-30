@@ -92,6 +92,7 @@ struct UsagePanel: View {
     @ObservedObject var store: Store
     @ObservedObject var tokens: TokenStore
     @ObservedObject var leaderboard: LeaderboardStore
+    @ObservedObject var layout: MenuPanelLayout
     @AppStorage("theme") private var themeID = Theme.tokyoNight.id
     @AppStorage("tab") private var tab: PanelTab = .limits
     @AppStorage("provider") private var provider: Provider = .claude
@@ -99,64 +100,51 @@ struct UsagePanel: View {
     @State private var choosingTheme = false
     @State private var showingSettings = false
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
-    @State private var heights: [String: CGFloat] = [:]
 
     private var t: Theme { Theme.named(themeID) }
     private var page: String { showingSettings ? "settings" : "\(provider.rawValue)/\(tab.rawValue)" }
-    private var panelHeight: CGFloat {
-        let maximum = min(680, (NSScreen.main?.visibleFrame.height ?? 700) - 20)
-        guard !showingSettings && tab == .limits else { return maximum }
-        // Three 12-point gaps, 28-point tab picker, and 14-point padding on each edge.
-        let chrome = (heights["header"] ?? 28) + (heights["footer"] ?? 16) + 92
-        return min(maximum, ceil(chrome + (heights[page] ?? 250)))
-    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-                .measurePanelHeight("header")
-            Segmented(options: PanelTab.allCases, selection: Binding(
-                get: { tab },
-                set: { tab = $0; showingSettings = false }
-            ), fill: true, showsSelection: !showingSettings) { $0.rawValue }
-            .frame(height: 28)
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 12) {
-                    if showingSettings {
-                        LeaderboardSettingsView(leaderboard: leaderboard)
-                    } else {
-                        tabContent
-                        if provider == .claude, store.usage != nil, let e = store.lastError, !store.inFlight {
-                            ErrorBanner(text: "Couldn't refresh: \(e). Retrying at \(clock(store.nextFetchAt)).")
-                        }
+        PanelViewport(layout: layout, page: page, fitsContent: !showingSettings && tab == .limits) {
+            VStack(alignment: .leading, spacing: 12) {
+                header
+                Segmented(options: PanelTab.allCases, selection: Binding(
+                    get: { tab },
+                    set: { tab = $0; showingSettings = false }
+                ), fill: true, showsSelection: !showingSettings) { $0.rawValue }
+                .frame(height: 28)
+            }
+        } content: {
+            VStack(alignment: .leading, spacing: 12) {
+                if showingSettings {
+                    LeaderboardSettingsView(leaderboard: leaderboard)
+                } else {
+                    tabContent
+                    if provider == .claude, store.usage != nil, let e = store.lastError, !store.inFlight {
+                        ErrorBanner(text: "Couldn't refresh: \(e). Retrying at \(clock(store.nextFetchAt)).")
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .measurePanelHeight(page)
             }
-            // Each page starts at the top rather than inheriting another page's scroll offset.
-            .id(page)
+        } footer: {
             footer
-                .measurePanelHeight("footer")
         }
-        .padding(14)
-        // Limits hugs its content; Tokens and Settings keep a roomy, screen-capped viewport.
-        .frame(width: 320, height: panelHeight, alignment: .top)
         .background(background)
-        .background(PanelWindowAnchor())
-        .onPreferenceChange(PanelHeights.self) { values in
-            let measured = values.filter { $0.value > 0 && $0.value.isFinite }
-            if measured.contains(where: { heights[$0.key] != $0.value }) {
-                heights.merge(measured) { _, new in new }
-            }
-        }
         .foregroundStyle(t.text)
         .environment(\.theme, t)
         .preferredColorScheme(t.isDark ? .dark : .light)
-        .onAppear { store.tick(); tokens.refresh() }
+        .onChange(of: layout.isPresented) { presented in
+            if presented { store.tick(); tokens.refresh() }
+            else { picking = false; choosingTheme = false }
+        }
+        .onExitCommand {
+            if picking { picking = false }
+            else if choosingTheme { choosingTheme = false }
+            else if showingSettings { showingSettings = false }
+            else { layout.dismiss() }
+        }
         .onChange(of: tab) { if $0 == .tokens { tokens.refresh() } }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
-            if tab == .tokens && !showingSettings { tokens.refresh() }
+            if layout.isPresented && tab == .tokens && !showingSettings { tokens.refresh() }
         }
     }
 

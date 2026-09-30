@@ -186,7 +186,11 @@ your own signing identity. Quit a running copy before launching a rebuild.
 swift build --product ClaudeUsageBar
 sh scripts/test-leaderboard.sh
 sh scripts/test-openai-credits.sh
+sh scripts/test-panel-layout.sh
 ```
+
+The native panel check requires a logged-in macOS desktop and briefly opens a synthetic
+popup to exercise provider switches, resizing, popovers and keyboard input. It reads no provider data.
 
 Leaderboard tests use synthetic counts and temporary state, not provider logs. To also
 exercise upload, pricing, and removal against a local API instance:
@@ -201,6 +205,7 @@ The check fails if secrets are detected and redacts secret values from its outpu
 ### Source layout
 
 - `Sources/main.swift`, `Views.swift`, `TokensView.swift`, `Theme.swift`: app and interface.
+- `Sources/MenuBarPanel.swift`, `PanelLayout.swift`: menu-bar anchoring and content-sized popup.
 - `Sources/Store.swift`, `Usage.swift`: Claude limits and polling.
 - `Sources/TokenLog.swift`, `CodexLog.swift`, `OpenCodeLog.swift`: local readers and aggregation.
 - `Sources/OpenAIUsage.swift`: ChatGPT limits and account history.
@@ -210,4 +215,5 @@ The check fails if secrets are detected and redacts secret values from its outpu
 - `scripts/build.sh`, `scripts/sign-app.sh`: app packaging and inside-out signing.
 - `scripts/test-leaderboard.sh`: isolated sharing tests.
 - `scripts/test-openai-credits.sh`: credit parsing and isolated Codex-log checks.
+- `scripts/test-panel-layout.sh`: native popup resizing and interaction checks.
 - `scripts/make-cert.sh`: optional self-signed identity for local development.

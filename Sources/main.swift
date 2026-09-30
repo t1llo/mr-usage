@@ -3,41 +3,46 @@
 // calls, authenticated with the OAuth token `claude login` stored in the macOS Keychain, plus the
 // local logs of Claude Code, Codex and OpenCode. Nothing to configure.
 import AppKit
+import Combine
 import SwiftUI
 
 struct ClaudeUsageBarApp: App {
     @NSApplicationDelegateAdaptor(MrUsageAppDelegate.self) private var appDelegate
-    @StateObject private var store = Store()
-    @StateObject private var tokens: TokenStore
-    @StateObject private var leaderboard: LeaderboardStore
 
     init() {
         // Refuse to run twice: a second instance would double the request rate.
         let me = Bundle.main.bundleIdentifier ?? "local.tillobeffa.ClaudeUsageBar"
         if NSRunningApplication.runningApplications(withBundleIdentifier: me).count > 1 { exit(0) }
-        let tokens = TokenStore()
-        _tokens = StateObject(wrappedValue: tokens)
-        _leaderboard = StateObject(wrappedValue: LeaderboardStore(tokens: tokens))
     }
 
     var body: some Scene {
-        MenuBarExtra {
-            UsagePanel(store: store, tokens: tokens, leaderboard: leaderboard)
-        } label: {
-            MenuTitle(store: store, tokens: tokens)
-        }
-        .menuBarExtraStyle(.window)
+        Settings { EmptyView() }
     }
 }
 
-/// Reads the provider itself, so switching it redraws only this label, not the whole scene.
-struct MenuTitle: View {
-    @ObservedObject var store: Store
-    @ObservedObject var tokens: TokenStore
-    @AppStorage("provider") private var provider: Provider = .claude
+@MainActor
+final class MrUsageAppDelegate: NSObject, NSApplicationDelegate {
+    private var menu: MenuBarPanelController?
+    private var subscriptions: Set<AnyCancellable> = []
 
-    var body: some View {
-        Text(provider == .claude ? store.menuTitle : tokens.menuTitle()).monospacedDigit()
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let store = Store()
+        let tokens = TokenStore()
+        let leaderboard = LeaderboardStore(tokens: tokens)
+        let menu = MenuBarPanelController { layout in
+            UsagePanel(store: store, tokens: tokens, leaderboard: leaderboard, layout: layout)
+        }
+        self.menu = menu
+        let updateTitle = { [weak menu] in
+            let provider = UserDefaults.standard.string(forKey: "provider").flatMap(Provider.init(rawValue:)) ?? .claude
+            menu?.setTitle(provider == .claude ? store.menuTitle : tokens.menuTitle(), provider: provider.rawValue)
+        }
+        Publishers.Merge(store.objectWillChange, tokens.objectWillChange)
+            .receive(on: DispatchQueue.main).sink(receiveValue: updateTitle).store(in: &subscriptions)
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: DispatchQueue.main).sink { _ in updateTitle() }.store(in: &subscriptions)
+        updateTitle()
+        UpdateService.shared.start()
     }
 }
 

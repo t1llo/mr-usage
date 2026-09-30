@@ -29,13 +29,6 @@ final class UpdateService: ObservableObject {
     func setAutomaticDownloads(_ enabled: Bool) { controller.updater.automaticallyDownloadsUpdates = enabled }
 }
 
-@MainActor
-final class MrUsageAppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        UpdateService.shared.start()
-    }
-}
-
 struct SoftwareUpdateMenu: View {
     @ObservedObject private var updater = UpdateService.shared
     var body: some View {
