@@ -99,13 +99,22 @@ struct UsagePanel: View {
     @State private var choosingTheme = false
     @State private var showingSettings = false
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var heights: [String: CGFloat] = [:]
 
     private var t: Theme { Theme.named(themeID) }
-    private var panelHeight: CGFloat { min(680, (NSScreen.main?.visibleFrame.height ?? 700) - 20) }
+    private var page: String { showingSettings ? "settings" : "\(provider.rawValue)/\(tab.rawValue)" }
+    private var panelHeight: CGFloat {
+        let maximum = min(680, (NSScreen.main?.visibleFrame.height ?? 700) - 20)
+        guard !showingSettings && tab == .limits else { return maximum }
+        // Three 12-point gaps, 28-point tab picker, and 14-point padding on each edge.
+        let chrome = (heights["header"] ?? 28) + (heights["footer"] ?? 16) + 92
+        return min(maximum, ceil(chrome + (heights[page] ?? 250)))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+                .measurePanelHeight("header")
             Segmented(options: PanelTab.allCases, selection: Binding(
                 get: { tab },
                 set: { tab = $0; showingSettings = false }
@@ -123,16 +132,24 @@ struct UsagePanel: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .measurePanelHeight(page)
             }
             // Each page starts at the top rather than inheriting another page's scroll offset.
-            .id(showingSettings ? "settings" : "\(provider.rawValue)/\(tab.rawValue)")
+            .id(page)
             footer
+                .measurePanelHeight("footer")
         }
         .padding(14)
-        // MenuBarExtra repositions when its intrinsic size changes. Keep its viewport stable
-        // across tabs, providers and refreshes; longer pages scroll below the fixed header.
+        // Limits hugs its content; Tokens and Settings keep a roomy, screen-capped viewport.
         .frame(width: 320, height: panelHeight, alignment: .top)
         .background(background)
+        .background(PanelWindowAnchor())
+        .onPreferenceChange(PanelHeights.self) { values in
+            let measured = values.filter { $0.value > 0 && $0.value.isFinite }
+            if measured.contains(where: { heights[$0.key] != $0.value }) {
+                heights.merge(measured) { _, new in new }
+            }
+        }
         .foregroundStyle(t.text)
         .environment(\.theme, t)
         .preferredColorScheme(t.isDark ? .dark : .light)

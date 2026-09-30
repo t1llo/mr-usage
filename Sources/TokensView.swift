@@ -107,11 +107,11 @@ struct TokensView: View {
             Card {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .firstTextBaseline) {
-                        readout(s, range: r)
+                        readout(s, range: r, account: account)
                         Spacer()
                         Segmented(options: ranges(account), selection: Binding(get: { r }, set: { range = $0 })) { $0.rawValue }
                     }
-                    if tokens.loaded || account { chart(s, range: r) } else {
+                    if tokens.loaded || account { chart(s, range: r, account: account) } else {
                         ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 120)
                     }
                 }
@@ -146,7 +146,7 @@ struct TokensView: View {
     }
 
     private var accountNote: String {
-        "From your ChatGPT account, every device, updated daily. Split and cost estimated from "
+        "All devices, by UTC day. Local Codex/OpenCode logs fill unreported days without double-counting. Account split and cost estimated from "
             + (tokens.mixFromLogs ? "this Mac's Codex logs." : "a typical Codex session.")
     }
 
@@ -159,24 +159,25 @@ struct TokensView: View {
     }
 
     /// Hovered bucket's value, or the range total for the selected metric.
-    private func readout(_ s: TokenSummary, range: TokenRange) -> some View {
+    private func readout(_ s: TokenSummary, range: TokenRange, account: Bool) -> some View {
         let b = hovered.flatMap { h in s.buckets.first { $0.start == h } }
         return VStack(alignment: .leading, spacing: 1) {
             Text(metric.format(b?.value ?? s.totals[metric] ?? 0))
                 .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
                 .contentTransition(.numericText())
-            Text("\(metric == .cost ? "API cost" : metric.rawValue.lowercased()) · \(b.map { bucketLabel($0.start, range: range) } ?? "last \(range.rawValue)")")
+            Text("\(metric == .cost ? "API cost" : metric.rawValue.lowercased()) · \(b.map { bucketLabel($0.start, range: range, account: account) } ?? "last \(range.rawValue)")")
                 .font(.caption).foregroundStyle(t.muted)
         }
     }
 
-    private func bucketLabel(_ d: Date, range: TokenRange) -> String {
+    private func bucketLabel(_ d: Date, range: TokenRange, account: Bool) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US")
+        if account { f.timeZone = usageUTCCalendar.timeZone }
         f.dateFormat = range == .day ? "EEE ha" : "EEE MMM d"
         return f.string(from: d).replacingOccurrences(of: "AM", with: "am").replacingOccurrences(of: "PM", with: "pm")
     }
 
-    private func chart(_ s: TokenSummary, range: TokenRange) -> some View {
+    private func chart(_ s: TokenSummary, range: TokenRange, account: Bool) -> some View {
         Chart(s.buckets) { b in
             BarMark(x: .value("Time", b.start, unit: range.unit), y: .value("Tokens", b.value))
                 .foregroundStyle(metric.color(t))
@@ -203,11 +204,12 @@ struct TokensView: View {
                         guard case .active(let p) = phase,
                               let d: Date = proxy.value(atX: p.x - g[proxy.plotAreaFrame].origin.x)
                         else { hovered = nil; return }
-                        hovered = Calendar.current.dateInterval(of: range.unit, for: d)?.start
+                        hovered = (account ? usageUTCCalendar : Calendar.current).dateInterval(of: range.unit, for: d)?.start
                     }
             }
         }
         .frame(height: 120)
+        .environment(\.timeZone, account ? usageUTCCalendar.timeZone : .current)
         .animation(.easeOut(duration: 0.4), value: metric)
         .animation(.easeOut(duration: 0.4), value: range)
     }

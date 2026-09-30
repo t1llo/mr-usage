@@ -31,6 +31,12 @@ struct TokenRecord {
     var cacheWrite1h: Int = 0
 }
 
+/// Publish both sources together after the initial scan and account fetch have finished.
+struct TokenSnapshot {
+    let local: [TokenRecord]
+    var account: [TokenRecord] = []
+}
+
 /// Reads transcripts incrementally: files are append-only, so each pass only parses the bytes
 /// added since the last one.
 actor TokenScanner {
@@ -131,8 +137,11 @@ final class TokenStore: ObservableObject {
     @Published private(set) var planHistory: PlanHistory?
     /// Lifetime and daily tokens across every Codex surface, the overview in Codex's /usage.
     @Published private(set) var activity: AccountActivity? { didSet { rebuildAccount() } }
-    /// `activity` as one record per day and model, so it charts like the log records.
+    /// Account estimates plus local usage on UTC days the account has not reported yet.
     private(set) var accountRecords: [TokenRecord] = []
+    private var estimatedAccountRecords: [TokenRecord] = []
+    @Published private(set) var sharingSnapshot: TokenSnapshot?
+    private var checkedAccount = false
     /// Whether the estimated split of `accountRecords` comes from this Mac's Codex logs.
     private(set) var mixFromLogs = false
     /// Summaries are asked for on every redraw (hover, provider switch), and a 30-day one over
@@ -178,6 +187,7 @@ final class TokenStore: ObservableObject {
             if oc.found { s.insert(.opencode) }
             sources = s
             loaded = true
+            publishSnapshot()
             scanning = false
         }
         fetchLive()
@@ -189,7 +199,7 @@ final class TokenStore: ObservableObject {
         fetchingLive = true
         nextLiveAt = Date().addingTimeInterval(liveInterval)
         Task {
-            defer { fetchingLive = false }
+            defer { fetchingLive = false; checkedAccount = true; publishSnapshot() }
             do {
                 guard let auth = try await Task.detached(operation: readCodexAuth).value else {
                     liveLimits = nil; liveError = nil; planHistory = nil; activity = nil; return
@@ -219,10 +229,12 @@ final class TokenStore: ObservableObject {
 extension TokenStore {
     func summary(_ provider: Provider, account: Bool, range: TokenRange, metric: TokenMetric) -> TokenSummary {
         let now = Date()
+        let calendar = account ? usageUTCCalendar : Calendar.current
         let key = SummaryKey(provider: provider, account: account, range: range, metric: metric,
-                             bucket: Calendar.current.dateInterval(of: range.unit, for: now)!.start)
+                             bucket: calendar.dateInterval(of: range.unit, for: now)!.start)
         if let s = summaries[key] { return s }
-        let s = summarize(account ? accountRecords : records, provider: provider, range: range, metric: metric, now: now)
+        let s = summarize(account ? accountRecords : records, provider: provider, range: range, metric: metric,
+                          now: now, calendar: calendar)
         summaries[key] = s
         return s
     }
@@ -231,7 +243,14 @@ extension TokenStore {
         summaries = [:]
         let local = TokenMix(records.filter { $0.source == .codex })
         mixFromLogs = local != nil
-        accountRecords = activity.map { estimatedRecords($0, mix: local ?? .codex) } ?? []
+        estimatedAccountRecords = activity.map { estimatedRecords($0, mix: local ?? .codex) } ?? []
+        accountRecords = reconciledOpenAIRecords(local: records, account: estimatedAccountRecords)
+        publishSnapshot()
+    }
+
+    private func publishSnapshot() {
+        guard loaded && checkedAccount else { return }
+        sharingSnapshot = TokenSnapshot(local: records, account: estimatedAccountRecords)
     }
 
     /// Menu bar text for OpenAI: the Codex windows' percentages, or "OpenAI" without a snapshot.
@@ -292,8 +311,7 @@ struct TokenSummary {
 }
 
 func summarize(_ records: [TokenRecord], provider: Provider, range: TokenRange, metric: TokenMetric,
-               now: Date = Date()) -> TokenSummary {
-    let cal = Calendar.current
+               now: Date = Date(), calendar cal: Calendar = .current) -> TokenSummary {
     let last = cal.dateInterval(of: range.unit, for: now)!.start
     let starts = (0..<range.count).map { cal.date(byAdding: range.unit, value: $0 - range.count + 1, to: last)! }
     var perBucket: [Date: Double] = [:]

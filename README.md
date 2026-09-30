@@ -59,7 +59,8 @@ Choose **Claude** or **OpenAI** in the provider picker. Both have two tabs:
 
 Click a token or cost total to chart it. The palette button changes the theme.
 The gear beside Refresh opens **Settings**; click either usage tab, **×**, or press
-**Escape** to return. The panel keeps its size between pages and scrolls without visible scrollbars.
+**Escape** to return. Limits fits its content; Tokens and Settings have a larger, screen-capped
+viewport. The panel stays anchored near the menu bar and scrolls without visible scrollbars.
 
 Enable **Open at Login** after moving the app to its permanent location in Applications.
 Only one instance runs at a time.
@@ -90,7 +91,8 @@ Only one instance runs at a time.
   OpenCode's database. Per-response records take precedence over running totals; copied
   responses and forked OpenCode sessions are deduplicated.
 - **All devices:** uses ChatGPT's daily account history across CLI, IDE, app, cloud, and
-  other machines. The service supplies daily totals and model shares, so input/output/cache
+  other machines. Account totals replace overlapping Codex/OpenCode logs for each reported
+  **UTC day**; local logs fill only unreported days. The service supplies daily totals and model shares, so input/output/cache
   splits and costs are **estimates**. They use this Mac's Codex mix when at least 1M tokens
   are available, otherwise a typical mix of 88% cache reads, 10% uncached input, and 2% output.
 - **Costs:** uses OpenAI Standard-tier list prices for prompts under 272K tokens, recomputed
@@ -119,17 +121,24 @@ You can save your display name and preferences locally before opting in.
 
 1. Open **Settings** using the gear beside Refresh.
 2. Enter a display name.
-3. For **Claude Code** and **Codex**, choose **Subscription**, **API billed**, or **Not shared**.
+3. For **Claude** and **OpenAI**, choose **Subscription**, **API billed**, or **Not shared**.
 4. Save your profile, enable **Share on leaderboard**, and choose **Open leaderboard**.
 
-Billing choices apply to all retained shared history for that tool. Logs cannot reliably
+Billing choices apply to all retained shared history for that provider across its tools. Logs cannot reliably
 identify the billing method; leave mixed or unknown history unshared.
 
 ### Exactly what gets shared
 
-Uploads contain your chosen display name and daily rows with the **UTC date, tool,
+Uploads contain your chosen display name and daily rows with the **UTC date, provider,
 model ID, billing category, uncached input tokens, output tokens (including reasoning),
-cache-read tokens, and separate 5-minute and 1-hour cache-write counts**.
+cache-read tokens, separate 5-minute and 1-hour cache-write counts, and an account-estimate flag**.
+
+- **OpenAI Subscription** shares the same reconciled **All devices** usage as the app.
+  Reported account days replace all overlapping local Codex/OpenCode models, rather than
+  adding both sources. Local logs fill unreported UTC days until account totals arrive.
+  The website marks these account-wide estimates; token-kind and model splits are estimates.
+- **Claude** includes Claude Code and OpenCode logs on this Mac.
+- **API-billed OpenAI** includes local Codex and OpenCode logs, without subscription account history.
 
 Requests also include a dedicated leaderboard authentication token, data-format version,
 sharing-consent flag, and app identifier. The server sees your connection's IP address.
@@ -138,11 +147,12 @@ using its own versioned prices, which can differ from the app's per-response est
 Neither board represents a verified invoice or subscription bill.
 
 **Never uploaded:** prompts, conversations, source code, provider API keys or OAuth tokens,
-project paths, session IDs, plan limits, credit balances, or payment details. OpenCode usage and OpenAI
-**All devices** estimates are excluded; sharing uses exact Claude Code and Codex local logs.
+project paths, session IDs, plan limits, credit balances, or payment details.
 
 The first sync includes the most recent **30 UTC days**. Older shared daily aggregates
 are retained locally for all-time totals. Recent days are replaced, not added twice.
+Known account totals survive temporary fetch failures and restarts; an explicit corrected
+account day replaces the earlier total, even if it is lower or zero.
 Sync runs every five minutes, including with the panel closed, with backoff on errors.
 
 **Turning sharing off deletes your public profile and its usage.** Pending uploads finish

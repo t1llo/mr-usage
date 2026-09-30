@@ -181,7 +181,7 @@ struct AccountActivity {
     let chats: Int?
     /// The reasoning effort used most, with its share of turns (0-100).
     let effort: (name: String, share: Double)?
-    /// Tokens per local calendar day, days without usage left out.
+    /// Tokens per UTC calendar day. An explicit zero still marks a reported day.
     let daily: [Date: Double]
     /// Each day's usage per model id. The server sends it relative to the busiest day, so only
     /// the shares mean anything.
@@ -201,14 +201,15 @@ func parseAccountActivity(_ json: [String: Any], breakdown: [String: Any]?) -> A
     guard let s = json["stats"] as? [String: Any], let lifetime = s["lifetime_tokens"] as? Double else { return nil }
     var daily: [Date: Double] = [:]
     for b in s["daily_usage_buckets"] as? [[String: Any]] ?? [] {
-        if let d = calendarDay(b["start_date"]), let n = b["tokens"] as? Double { daily[d, default: 0] += n }
+        if let d = calendarDay(b["start_date"]), let n = b["tokens"] as? Double,
+           n.isFinite, n >= 0, n < Double(Int.max) { daily[d, default: 0] += n }
     }
     var modelDays: [Date: [String: Double]] = [:]
     for day in breakdown?["data"] as? [[String: Any]] ?? [] {
         guard let d = calendarDay(day["date"]) else { continue }
         for m in day["models"] as? [[String: Any]] ?? [] {
             // One row per model and speed; the speeds are summed.
-            guard let id = m["model"] as? String, let v = m["credits"] as? Double, v > 0 else { continue }
+            guard let id = m["model"] as? String, let v = m["credits"] as? Double, v.isFinite, v > 0 else { continue }
             modelDays[d, default: [:]][id, default: 0] += v
         }
     }
@@ -222,13 +223,22 @@ func parseAccountActivity(_ json: [String: Any], breakdown: [String: Any]?) -> A
         chats: s["total_threads"] as? Int, effort: effort, daily: daily, modelDays: modelDays)
 }
 
-/// "2026-09-25" as the start of that day here, so it lines up with the chart's day buckets.
+var usageUTCCalendar: Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    return calendar
+}
+
+/// Account dates and leaderboard days have the same UTC boundary, independent of this Mac.
 private func calendarDay(_ any: Any?) -> Date? {
     guard let s = any as? String else { return nil }
     let f = DateFormatter()
+    f.calendar = usageUTCCalendar
+    f.timeZone = usageUTCCalendar.timeZone
     f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "yyyy-MM-dd"
-    return f.date(from: s)
+    guard let date = f.date(from: s), f.string(from: date) == s else { return nil }
+    return date
 }
 
 /// How a token total divides into kinds, as fractions that add up to 1. The account only
@@ -258,16 +268,40 @@ struct TokenMix {
 /// usage (all to "unknown" without a breakdown), then into kinds by `mix`.
 func estimatedRecords(_ a: AccountActivity, mix: TokenMix) -> [TokenRecord] {
     a.daily.flatMap { day, tokens -> [TokenRecord] in
+        guard tokens.isFinite, tokens >= 0, tokens < Double(Int.max) else { return [] }
         let models = a.modelDays[day] ?? [:]
-        let sum = models.values.reduce(0, +)
-        let shares = sum > 0 ? models.mapValues { $0 / sum } : ["unknown": 1]
-        return shares.map { name, share in
-            let n = tokens * share
-            let input = Int(n * mix.input), read = Int(n * mix.cacheRead)
-            let write = Int(n * mix.cacheWrite), output = Int(n * mix.output)
+        let names = models.isEmpty ? ["unknown"] : models.keys.sorted()
+        let counts = apportionedTokens(Int(tokens), weights: names.map { models[$0] ?? 1 })
+        return zip(names, counts).map { name, count in
+            let split = apportionedTokens(count, weights: [mix.input, mix.cacheRead, mix.cacheWrite, mix.output])
+            let (input, read, write, output) = (split[0], split[1], split[2], split[3])
             return TokenRecord(date: day, model: name, provider: .openai, source: .chatgpt,
                                input: input, output: output, cacheWrite: write, cacheRead: read,
                                cost: openAICost(model: name, input: input, output: output, cacheWrite: write, cacheRead: read))
         }
+    }
+}
+
+/// Largest remainders keep the reported total exact after estimating model and token-kind splits.
+private func apportionedTokens(_ total: Int, weights: [Double]) -> [Int] {
+    let sum = weights.reduce(0, +)
+    guard sum > 0 else { return weights.indices.map { $0 == 0 ? total : 0 } }
+    let shares = weights.map { Double(total) * ($0 / sum) }
+    var counts = shares.map { Int($0) }
+    let order = shares.indices.sorted {
+        let a = shares[$0] - Double(counts[$0]), b = shares[$1] - Double(counts[$1])
+        return a == b ? $0 < $1 : a > b
+    }
+    for i in order.prefix(max(0, total - counts.reduce(0, +))) { counts[i] += 1 }
+    return counts
+}
+
+/// Account totals already include Codex and OpenCode using that subscription. Replace whole
+/// reported UTC days, not individual models; local logs fill only days not yet reported.
+func reconciledOpenAIRecords(local: [TokenRecord], account: [TokenRecord]) -> [TokenRecord] {
+    let calendar = usageUTCCalendar
+    let reported = Set(account.map { calendar.startOfDay(for: $0.date) })
+    return account + local.filter {
+        $0.provider == .openai && $0.source != .chatgpt && !reported.contains(calendar.startOfDay(for: $0.date))
     }
 }

@@ -30,6 +30,8 @@ struct SharedUsageBucket: Codable {
     var cacheWriteTokens = 0
     var cacheWrite1hTokens = 0
     var billing: String = "unclassified"
+    /// Nil in older saved archives means local counts. Account splits/costs are estimates.
+    var estimated: Bool?
 
     var key: String { "\(day)|\(provider)|\(model)" }
 }
@@ -90,9 +92,10 @@ func leaderboardDisplayName(_ text: String) throws -> String {
 
 /// Preserve completed historical days, replace the complete recent UTC window,
 /// and never add a repeated scan to a previously counted day.
-func archiveLeaderboardUsage(_ records: [TokenRecord], previous: [SharedUsageBucket], now: Date = Date()) -> [SharedUsageBucket] {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+func archiveLeaderboardUsage(_ records: [TokenRecord], account: [TokenRecord] = [],
+                             previous: [SharedUsageBucket], includeAccount: Bool = true,
+                             now: Date = Date()) -> [SharedUsageBucket] {
+    let calendar = usageUTCCalendar
     let today = calendar.startOfDay(for: now)
     let from = calendar.date(byAdding: .day, value: -29, to: today)!
     let formatter = DateFormatter()
@@ -101,23 +104,40 @@ func archiveLeaderboardUsage(_ records: [TokenRecord], previous: [SharedUsageBuc
     formatter.timeZone = calendar.timeZone
     formatter.dateFormat = "yyyy-MM-dd"
     let fromDay = formatter.string(from: from)
-    var buckets: [String: SharedUsageBucket] = [:]
-    for bucket in previous where bucket.day < fromDay { buckets[bucket.key] = bucket }
-    for record in records where record.date >= from && record.date <= now {
-        // The website's two sources are Claude Code and Codex. OpenCode has its
-        // own mixed authentication paths and remains in the app's local charts.
-        guard record.source == .claudeCode || record.source == .codex else { continue }
-        let provider = record.source == .claudeCode ? "claude" : "codex"
-        let day = formatter.string(from: record.date)
-        let key = "\(day)|\(provider)|\(record.model)"
-        var bucket = buckets[key] ?? SharedUsageBucket(day: day, provider: provider, model: record.model)
-        let write1h = min(max(0, record.cacheWrite1h), max(0, record.cacheWrite))
-        bucket.inputTokens += max(0, record.input)
-        bucket.outputTokens += max(0, record.output)
-        bucket.cacheReadTokens += max(0, record.cacheRead)
-        bucket.cacheWriteTokens += max(0, record.cacheWrite - write1h)
-        bucket.cacheWrite1hTokens += write1h
-        buckets[key] = bucket
+    func aggregate(_ records: [TokenRecord], estimated: Bool) -> [String: SharedUsageBucket] {
+        var result: [String: SharedUsageBucket] = [:]
+        for record in records where record.date >= from && record.date <= now {
+            let provider = record.provider == .claude ? "claude" : "codex"
+            let day = formatter.string(from: record.date)
+            let key = "\(day)|\(provider)|\(record.model)"
+            var bucket = result[key] ?? SharedUsageBucket(day: day, provider: provider, model: record.model, estimated: estimated)
+            let write1h = min(max(0, record.cacheWrite1h), max(0, record.cacheWrite))
+            bucket.inputTokens += max(0, record.input)
+            bucket.outputTokens += max(0, record.output)
+            bucket.cacheReadTokens += max(0, record.cacheRead)
+            bucket.cacheWriteTokens += max(0, record.cacheWrite - write1h)
+            bucket.cacheWrite1hTokens += write1h
+            result[key] = bucket
+        }
+        return result
+    }
+
+    let freshAccount = aggregate(includeAccount ? account.filter { $0.provider == .openai && $0.source == .chatgpt } : [], estimated: true)
+    let replacedDays = Set(freshAccount.values.map(\.day))
+    var accountBuckets: [String: SharedUsageBucket] = [:]
+    // A restart or temporary account failure must not replace known all-device totals with
+    // a partial local day. Zero-token account buckets also retain the day's coverage.
+    for bucket in previous where includeAccount && bucket.estimated == true && bucket.provider == "codex"
+        && bucket.day >= fromDay && !replacedDays.contains(bucket.day) {
+        accountBuckets[bucket.key] = bucket
+    }
+    accountBuckets.merge(freshAccount) { _, new in new }
+    let reportedDays = Set(accountBuckets.values.map(\.day))
+    var buckets = aggregate(records.filter { $0.source != .chatgpt }, estimated: false)
+        .filter { $0.value.provider != "codex" || !reportedDays.contains($0.value.day) }
+    buckets.merge(accountBuckets) { _, new in new }
+    for bucket in previous where bucket.day < fromDay && (includeAccount || bucket.estimated != true) {
+        buckets[bucket.key] = bucket
     }
     return buckets.values.sorted { $0.key < $1.key }
 }
@@ -126,8 +146,10 @@ func leaderboardSnapshot(_ state: LeaderboardState) -> LeaderboardSnapshot {
     let buckets = state.archive.compactMap { bucket -> SharedUsageBucket? in
         let mode = bucket.provider == "claude" ? state.claudeBilling : state.codexBilling
         guard mode != .unclassified else { return nil }
+        guard bucket.estimated != true || mode == .subscription else { return nil }
         var shared = bucket
         shared.billing = mode.rawValue
+        shared.estimated = bucket.estimated ?? false
         return shared
     }
     return LeaderboardSnapshot(displayName: state.displayName, buckets: buckets)
@@ -148,17 +170,17 @@ final class LeaderboardStore: ObservableObject {
     @Published private(set) var status = "Sharing is off. Your usage stays on this Mac."
 
     private let stateURL: URL
-    private var latestRecords: [TokenRecord]?
+    private var latestUsage: TokenSnapshot?
     private var subscription: AnyCancellable?
     private var failures = 0
     private var retryNotBefore = Date.distantPast
     private let session = URLSession(configuration: .ephemeral, delegate: LeaderboardRedirectPolicy(), delegateQueue: nil)
 
     convenience init(tokens: TokenStore) {
-        self.init(records: tokens.$records.dropFirst().eraseToAnyPublisher())
+        self.init(usage: tokens.$sharingSnapshot.compactMap { $0 }.eraseToAnyPublisher())
     }
 
-    init(records: AnyPublisher<[TokenRecord], Never>, stateURL: URL? = nil) {
+    init(usage: AnyPublisher<TokenSnapshot, Never>, stateURL: URL? = nil) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         self.stateURL = stateURL ?? support.appendingPathComponent("ClaudeUsageBar/leaderboard.json")
         if FileManager.default.fileExists(atPath: self.stateURL.path) {
@@ -166,9 +188,9 @@ final class LeaderboardStore: ObservableObject {
             catch { lastError = "Couldn’t read leaderboard settings. Sharing is paused: \(error.localizedDescription)" }
         }
         if state.pendingRemoval { status = "Removal pending. Retrying when connected." }
-        else if state.enabled { status = "Waiting for local usage to load…" }
-        subscription = records.sink { [weak self] records in
-            self?.latestRecords = records
+        else if state.enabled { status = "Waiting for usage to load…" }
+        subscription = usage.sink { [weak self] usage in
+            self?.latestUsage = usage
             self?.tick()
         }
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
@@ -205,7 +227,7 @@ final class LeaderboardStore: ObservableObject {
             let origin = try leaderboardOrigin(website).absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let displayName = try leaderboardDisplayName(name)
             guard claude != .unclassified || codex != .unclassified else {
-                throw LeaderboardError.message("Choose a billing category for at least one tool.")
+                throw LeaderboardError.message("Choose a billing category for at least one provider.")
             }
             if state.enabled, origin != state.website {
                 throw LeaderboardError.message("Turn off sharing and finish removal before changing websites.")
@@ -247,7 +269,7 @@ final class LeaderboardStore: ObservableObject {
 
     func tick() {
         guard !inFlight, Date() >= nextAttemptAt else { return }
-        guard state.pendingRemoval || (state.enabled && latestRecords != nil) else { return }
+        guard state.pendingRemoval || (state.enabled && latestUsage != nil) else { return }
         inFlight = true
         Task {
             let removing = state.pendingRemoval
@@ -260,9 +282,12 @@ final class LeaderboardStore: ObservableObject {
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.setValue("ClaudeUsageBar/0.3", forHTTPHeaderField: "User-Agent")
                 if !removing {
-                    let records = latestRecords ?? []
+                    let usage = latestUsage ?? TokenSnapshot(local: [])
                     let previous = state.archive
-                    let archive = await Task.detached { archiveLeaderboardUsage(records, previous: previous) }.value
+                    let includeAccount = state.codexBilling == .subscription
+                    let archive = await Task.detached {
+                        archiveLeaderboardUsage(usage.local, account: usage.account, previous: previous, includeAccount: includeAccount)
+                    }.value
                     // The user can opt out while aggregation is running.
                     guard state.enabled else { inFlight = false; tick(); return }
                     state.archive = archive

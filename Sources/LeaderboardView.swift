@@ -21,9 +21,9 @@ struct LeaderboardSettingsView: View {
                         TextField("Your leaderboard name", text: $name).textFieldStyle(.roundedBorder)
                             .onSubmit { save() }
                     }
-                    billingPicker("Claude Code", selection: $claude)
-                    billingPicker("Codex", selection: $codex)
-                    Text("Choose how each tool’s history was billed. Leave mixed or unknown usage unshared. Changes apply to all retained shared history.")
+                    billingPicker("Claude", selection: $claude)
+                    billingPicker("OpenAI", selection: $codex)
+                    Text("Choose how each provider’s usage was billed across your tools. OpenAI Subscription uses All devices; API billed uses local logs. Leave mixed or unknown billing unshared. Changes apply to retained history.")
                         .font(.system(size: 10)).foregroundStyle(t.muted).fixedSize(horizontal: false, vertical: true)
                     Button("Save profile") { save() }
                         .controlSize(.small)
@@ -75,24 +75,26 @@ struct LeaderboardSettingsView: View {
 
     private var sharingDetails: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Sends your display name and daily token counts, grouped by tool, model and billing category, to \((website ?? LeaderboardConfiguration.origin).host ?? "the leaderboard").")
+            Text("Sends your display name and daily token counts, grouped by provider, model and billing category, to \((website ?? LeaderboardConfiguration.origin).host ?? "the leaderboard"). Includes OpenCode and OpenAI All devices totals.")
                 .foregroundStyle(t.muted)
                 .fixedSize(horizontal: false, vertical: true)
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 12) {
                     sharingDetail("Uploaded fields", """
                     • Your chosen display name.
-                    • UTC date, tool (Claude Code or Codex) and model ID for each daily total.
+                    • UTC date, provider (Claude or OpenAI) and model ID for each daily total.
                     • Your billing category: Subscription or API billed.
                     • Uncached input token count.
                     • Output token count, including reasoning.
                     • Cache-read token count.
                     • Cache-write counts, split into 5-minute and 1-hour writes.
+                    • Whether token splits and costs come from All devices estimates.
                     """)
                     sharingDetail("Connection data", "A random, leaderboard-only authentication token, data-format version and sharing-consent flag are also sent. Requests include an app identifier; the server also sees your IP address.")
-                    sharingDetail("Shown publicly", "Your name, rank, total tokens, estimated API value/spend, tools used, active days, recent daily usage and last sync time. The website calculates dollar estimates from the counts; these are not subscription charges or verified bills.")
-                    sharingDetail("History and removal", "Syncs about every 5 minutes. Starts with the last 30 UTC days and retains older daily totals for all-time rankings. Tools set to Not shared are excluded. Turning sharing off requests deletion of your profile and uploaded totals; offline removals retry when connected.")
-                    sharingDetail("Not uploaded", "Prompts, responses, code, file or project paths, session or request IDs, provider API keys or login tokens, plan limits, credit balances, payment details, OpenCode usage, or ChatGPT All devices estimates.")
+                    sharingDetail("Counted once", "OpenAI Subscription uses account-wide daily totals, which already cover Codex and OpenCode on that account. Local logs fill only unreported UTC days and are replaced when account totals arrive. Token-kind and model splits are estimated, just like All devices in the app. Claude and API-billed OpenAI use local logs from all supported tools.")
+                    sharingDetail("Shown publicly", "Your name, rank, total tokens, estimated API value/spend, providers, All devices coverage, active days, recent daily usage and last sync time. The website calculates dollar estimates from the counts; these are not subscription charges or verified bills.")
+                    sharingDetail("History and removal", "Syncs about every 5 minutes. Starts with the last 30 UTC days and retains older daily totals for all-time rankings. Providers set to Not shared are excluded. Turning sharing off requests deletion of your profile and uploaded totals; offline removals retry when connected.")
+                    sharingDetail("Not uploaded", "Prompts, responses, code, file or project paths, session or request IDs, provider API keys or login tokens, plan limits, credit balances, or payment details.")
                 }
                 .padding(.top, 8)
             } label: {
