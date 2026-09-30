@@ -53,6 +53,7 @@ final class MenuBarPanelController: NSObject {
         host.sizingOptions = []
         panel.contentView = host
         panel.isReleasedWhenClosed = false
+        panel.isRestorable = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true

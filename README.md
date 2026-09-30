@@ -206,7 +206,8 @@ sh scripts/test-panel-layout.sh
 ```
 
 The native panel check requires a logged-in macOS desktop and briefly opens a synthetic
-popup to exercise provider switches, resizing, popovers and keyboard input. It reads no provider data.
+popup to exercise startup, provider switches, resizing, popovers, in-panel Settings shortcuts
+and legacy window restoration. It reads no provider data.
 
 Leaderboard tests use synthetic counts and temporary state, not provider logs. To also
 exercise upload, pricing, and removal against a local API instance:
@@ -221,6 +222,7 @@ The check fails if secrets are detected and redacts secret values from its outpu
 ### Source layout
 
 - `Sources/main.swift`, `Views.swift`, `TokensView.swift`, `Theme.swift`: app and interface.
+- `Sources/MenuBarApplication.swift`: windowless app lifecycle and legacy window-state cleanup.
 - `Sources/MenuBarPanel.swift`, `PanelLayout.swift`: menu-bar anchoring and content-sized popup.
 - `Sources/StatusItemReadout.swift`, `AppIcon.swift`: labeled menu-bar meters and light/dark branding.
 - `Sources/Store.swift`, `Usage.swift`: Claude limits and polling.

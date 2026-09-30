@@ -26,24 +26,30 @@ private struct RenderedSize: PreferenceKey {
 private struct FixtureView: View {
     @ObservedObject var fixture: Fixture
     @ObservedObject var layout: MenuPanelLayout
-    @FocusState private var editing: Bool
 
     var body: some View {
         PanelViewport(layout: layout, page: fixture.page, fitsContent: fixture.fitsContent) {
             if fixture.page == "settings" {
                 TextField("Display name", text: $fixture.name)
-                    .focused($editing).frame(height: 68)
-                    .onAppear { editing = true }
+                    .frame(height: 68)
             } else {
                 VStack(spacing: 12) {
-                    Button("Switch provider") { fixture.picking = true }
-                        .frame(height: 28)
-                        .popover(isPresented: $fixture.picking, arrowEdge: .bottom) {
-                            Text("Claude · OpenAI")
-                                .padding(20)
-                                .onAppear { fixture.popoverVisible = true }
-                                .onDisappear { fixture.popoverVisible = false }
+                    HStack {
+                        Button("Switch provider") { fixture.picking = true }
+                            .popover(isPresented: $fixture.picking, arrowEdge: .bottom) {
+                                Text("Claude · OpenAI")
+                                    .padding(20)
+                                    .onAppear { fixture.popoverVisible = true }
+                                    .onDisappear { fixture.popoverVisible = false }
+                            }
+                        Button("Settings") {
+                            fixture.page = "settings"
+                            fixture.fitsContent = false
+                            fixture.contentHeight = 1400
                         }
+                        .keyboardShortcut(",", modifiers: .command)
+                    }
+                    .frame(height: 28)
                     Segmented(options: ["Limits", "Tokens"], selection: Binding(
                         get: { fixture.fitsContent ? "Limits" : "Tokens" },
                         set: {
@@ -80,16 +86,21 @@ private struct FixtureView: View {
 
 @main
 struct PanelLayoutTests {
-    @MainActor static func main() throws {
+    @MainActor static func main() {
+        MenuBarApplication.run(delegate: PanelTestDelegate())
+    }
+
+    @MainActor static func runChecks() throws {
         setbuf(stdout, nil)
         let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
-        app.finishLaunching()
+        assert(app is MenuBarApplication && app.activationPolicy() == .accessory)
+        assert(!app.windows.contains { $0.styleMask.contains(.titled) }, "Launch must not create a standalone window")
         // Keep this isolated test process's item on the visible side of menu-bar organizers.
         UserDefaults.standard.setVolatileDomain(["NSStatusItem Preferred Position Item-0": 0], forName: UserDefaults.argumentDomain)
         app.activate(ignoringOtherApps: true)
         let fixture = Fixture()
         let menu = MenuBarPanelController { FixtureView(fixture: fixture, layout: $0) }
+        assert(!menu.panel.isRestorable)
         defer { menu.hide() }
         try wait("Status item must be placed in the menu bar") {
             guard let window = menu.statusItem.button?.window, let screen = window.screen else { return false }
@@ -170,12 +181,17 @@ struct PanelLayoutTests {
         fixture.fitsContent = false
         fixture.contentHeight = 1100
         try check(menu.layout.maximumHeight)
-        fixture.page = "settings"
-        fixture.contentHeight = 1400
+        sendKey(",", code: 43, modifiers: .command, to: menu.panel)
+        try wait("Command-comma must open Settings inside the existing popup") { fixture.page == "settings" }
         try check(menu.layout.maximumHeight)
+        assert(!app.windows.contains { $0.styleMask.contains(.titled) }, "Settings must not open another window")
+        click(NSPoint(x: 140, y: menu.panel.frame.height - 48), in: menu.panel)
         try wait("Settings text field must receive keyboard focus") { menu.panel.firstResponder is NSTextView }
         sendKey("a", code: 0, to: menu.panel)
         try wait("Typing in the nonactivating panel must edit the profile field") { fixture.name == "a" }
+        sendKey("a", code: 0, modifiers: .command, to: menu.panel)
+        sendKey("b", code: 11, to: menu.panel)
+        try wait("Standard text-editing shortcuts must still work without a SwiftUI app scene") { fixture.name == "b" }
         // Click the text well away from the chevron: the entire sharing-details row is active.
         click(NSPoint(x: 170, y: menu.panel.frame.height - 108), in: menu.panel)
         try wait("Clicking sharing-details text must expand it") { fixture.detailsVisible }
@@ -209,21 +225,43 @@ struct PanelLayoutTests {
         menu.statusItem.button!.performClick(nil)
         assert(!menu.panel.isVisible)
         print("PASS: Settings keyboard input, close/reopen, Escape and status-button toggling")
+
+        for action in ["showSettingsWindow:", "showPreferencesWindow:"] {
+            assert(!app.sendAction(NSSelectorFromString(action), to: nil, from: nil),
+                   "A standalone Settings scene must not be registered")
+        }
+        let archive = try NSKeyedArchiver.archivedData(withRootObject: NSDictionary(), requiringSecureCoding: true)
+        let state = try NSKeyedUnarchiver(forReadingFrom: archive)
+        defer { state.finishDecoding() }
+        var finishedRestoring = false
+        let recognized = app.restoreWindow(withIdentifier: NSUserInterfaceItemIdentifier("com_apple_SwiftUI_Settings_window"), state: state) { window, error in
+            assert(window == nil && error == nil, "An old blank Settings window must be discarded")
+            finishedRestoring = true
+        }
+        assert(recognized && finishedRestoring, "Discarding old window state must finish restoration")
+        assert(!app.windows.contains { $0.styleMask.contains(.titled) })
+        print("PASS: native app launch, in-panel Settings shortcut and discarded legacy Settings-window restoration")
     }
 
-    @MainActor private static func sendKey(_ characters: String, code: UInt16, to window: NSWindow) {
-        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                                    windowNumber: window.windowNumber, context: nil, characters: characters,
-                                    charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
-        NSApp.sendEvent(event)
+    @MainActor private static func sendKey(_ characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], to window: NSWindow) {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
+                                        timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: window.windowNumber, context: nil, characters: characters,
+                                        charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+            NSApp.sendEvent(event)
+        }
     }
 
     @MainActor private static func click(_ point: NSPoint, in window: NSWindow) {
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            NSApp.sendEvent(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
-                                              timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                                              context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!)
-        }
+        let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
+                                   timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                   context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
+        // Native text fields consume mouse-up in their mouse-down tracking loop.
+        NSApp.postEvent(up, atStart: true)
+        NSApp.sendEvent(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
+                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!)
     }
 
     @MainActor private static func wait(_ message: String, until condition: () -> Bool) throws {
@@ -236,6 +274,26 @@ struct PanelLayoutTests {
             RunLoop.current.run(until: Date().addingTimeInterval(0.03))
             if condition() { return }
         } while Date() < deadline
+        print("Application active:", NSApp.isActive)
+        for window in NSApp.windows where window.isVisible && window.canBecomeKey {
+            print("Window:", type(of: window), "visible:", window.isVisible, "key:", window.isKeyWindow,
+                  "responder:", window.firstResponder.map { String(describing: type(of: $0)) } ?? "none")
+        }
         throw NSError(domain: "PanelLayoutTests", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}
+
+@MainActor
+private final class PanelTestDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.async {
+            do {
+                try PanelLayoutTests.runChecks()
+                NSApp.terminate(nil)
+            } catch {
+                print("FAIL:", error)
+                exit(1)
+            }
+        }
     }
 }

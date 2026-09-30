@@ -4,19 +4,13 @@
 // local logs of Claude Code, Codex and OpenCode. Nothing to configure.
 import AppKit
 import Combine
-import SwiftUI
 
-struct ClaudeUsageBarApp: App {
-    @NSApplicationDelegateAdaptor(MrUsageAppDelegate.self) private var appDelegate
-
-    init() {
+enum ClaudeUsageBarApp {
+    @MainActor static func main() {
         // Refuse to run twice: a second instance would double the request rate.
         let me = Bundle.main.bundleIdentifier ?? "local.tillobeffa.ClaudeUsageBar"
         if NSRunningApplication.runningApplications(withBundleIdentifier: me).count > 1 { exit(0) }
-    }
-
-    var body: some Scene {
-        Settings { EmptyView() }
+        MenuBarApplication.run(delegate: MrUsageAppDelegate())
     }
 }
 
@@ -25,6 +19,10 @@ final class MrUsageAppDelegate: NSObject, NSApplicationDelegate {
     private var menu: MenuBarPanelController?
     private var subscriptions: Set<AnyCancellable> = []
     private var appearanceObserver: NSKeyValueObservation?
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { false }
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let store = Store()
@@ -53,4 +51,4 @@ final class MrUsageAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-ClaudeUsageBarApp.main()
+MainActor.assumeIsolated { ClaudeUsageBarApp.main() }

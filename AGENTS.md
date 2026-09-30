@@ -21,6 +21,7 @@
 ## Data and cross-file coupling
 
 - `Sources/main.swift` creates `Store` (`Sources/Store.swift`, Claude limits) and `TokenStore` (`Sources/TokenLog.swift`, token logs plus OpenAI limits/history), with an explicit top-level `ClaudeUsageBarApp.main()` call rather than `@main`.
+- `MenuBarApplication` runs the AppKit lifecycle without SwiftUI window scenes and discards legacy window restoration. Settings belongs inside `UsagePanel`; do not add an empty `Settings` scene, which can produce a blank standalone window.
 - `MenuBarPanelController` owns the popup's native frame, anchored to the status button's screen. Keep `NSHostingView.sizingOptions` empty: `PanelViewport` measures content and supplies the size. Provider/theme popovers taking focus must not reset its position or dismiss it. Preserve the `Item-0` status-item autosave name to retain the user's menu-bar position.
 - Page changes and sharing disclosures are immediate: do not animate content into a differently sized native panel. `StatusItemReadout` labels the first two server-defined windows in a template image; keep full provider/window descriptions accessible. `scripts/build-icons.sh` packages the light/dark artwork from `docs/assets/`.
 - Data roots: Claude transcripts in `~/.claude/projects`; Codex auth/logs under `$CODEX_HOME` (default `~/.codex`, including `sessions` and `archived_sessions`); OpenCode auth/databases under `$XDG_DATA_HOME/opencode` (default `~/.local/share/opencode`). Counts cover local logs; OpenAI plan history is remote and daily-aggregated.
