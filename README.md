@@ -15,6 +15,7 @@ and estimated API costs without leaving your desktop.
 - **OpenAI credit balance** for additional usage, including promotional credits reported by your account.
 - **Local usage** from Claude Code, Codex, and OpenCode, plus an OpenAI **All devices** view.
 - **Three themes:** Tokyo Night, Catppuccin Mocha, and Catppuccin Latte.
+- **Frosted surfaces** with minimal controls and softly shaded activity charts.
 - **Optional leaderboard sharing** at [usage.beffa.xyz](https://usage.beffa.xyz), off by default.
 - **Automatic updates** and **Open at Login**.
 
@@ -41,7 +42,7 @@ existing logins; there is no separate provider login to configure in the app.
 ### Automatic updates
 
 Sparkle checks for updates hourly and can download them automatically for installation
-when the app quits. The footer's download-circle menu has **Check for Updates…** and
+when the app quits. The footer's download menu has **Check for Updates…** and
 automatic-update preferences. Choose **Install and Relaunch** when an update is offered.
 
 Update feeds and archives are verified with an embedded public EdDSA key. GitHub releases
@@ -57,10 +58,12 @@ Choose **Claude** or **OpenAI** in the provider picker. Both have two tabs:
 | **Limits** | Session and weekly usage, reset times, pace markers, and extra-usage credits where available. OpenAI also shows recent plan windows. |
 | **Tokens** | Usage charts, totals, estimated API cost, and a model breakdown. OpenAI offers **This Mac** and **All devices** views. |
 
-Click a token or cost total to chart it. The palette button changes the theme.
+Click a token or cost total to chart it. The appearance button changes the theme.
 The gear beside Refresh opens **Settings**; click either usage tab, **×**, or press
 **Escape** to return. Limits fits its content; Tokens and Settings have a larger, screen-capped
 viewport. The panel stays anchored near the menu bar and scrolls without visible scrollbars.
+Expand **Recent plan usage** to see OpenAI's earlier windows. Translucency follows the macOS
+**Reduce transparency** setting.
 
 Enable **Open at Login** after moving the app to its permanent location in Applications.
 Only one instance runs at a time.

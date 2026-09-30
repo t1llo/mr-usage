@@ -40,7 +40,7 @@ struct SoftwareUpdateMenu: View {
             Toggle("Download and install automatically", isOn: Binding(
                 get: { updater.automaticDownloads }, set: updater.setAutomaticDownloads))
         } label: {
-            Image(systemName: "arrow.down.circle")
+            Image(systemName: "arrow.down.to.line")
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         .help("Software updates").accessibilityLabel("Software updates")

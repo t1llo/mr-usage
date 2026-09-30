@@ -6,19 +6,25 @@ struct LeaderboardSettingsView: View {
     @State private var name = ""
     @State private var claude: LeaderboardBilling = .unclassified
     @State private var codex: LeaderboardBilling = .unclassified
+    @FocusState private var editingName: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Card {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Leaderboard", systemImage: "trophy.fill")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(t.accent)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Leaderboard")
+                        .font(.system(size: 14, weight: .medium))
                     Text("Choose the name people see next to your usage.")
                         .font(.caption).foregroundStyle(t.subtext).fixedSize(horizontal: false, vertical: true)
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Display name").font(.caption.weight(.medium))
-                        TextField("Your leaderboard name", text: $name).textFieldStyle(.roundedBorder)
+                        Text("Display name").font(.system(size: 10)).foregroundStyle(t.muted)
+                        TextField("Your leaderboard name", text: $name)
+                            .textFieldStyle(.plain).font(.system(size: 12))
+                            .focused($editingName)
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(t.track.opacity(0.55)))
+                            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(editingName ? t.accent.opacity(0.6) : .clear, lineWidth: 1))
                             .onSubmit { save() }
                     }
                     billingPicker("Claude", selection: $claude)
@@ -26,15 +32,19 @@ struct LeaderboardSettingsView: View {
                     Text("Choose how each provider’s usage was billed across your tools. OpenAI Subscription uses All devices; API billed uses local logs. Leave mixed or unknown billing unshared. Changes apply to retained history.")
                         .font(.system(size: 10)).foregroundStyle(t.muted).fixedSize(horizontal: false, vertical: true)
                     Button("Save profile") { save() }
-                        .controlSize(.small)
+                        .buttonStyle(PanelActionButtonStyle())
                         .disabled(!hasChanges || leaderboard.inFlight || leaderboard.state.pendingRemoval)
-                    Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5)
+                }
+            }
+            Card {
+                VStack(alignment: .leading, spacing: 14) {
                     Toggle("Share on leaderboard", isOn: Binding(
                         get: { leaderboard.state.enabled },
                         set: { on in
                             if on { leaderboard.enable(name: name, claude: claude, codex: codex) }
                             else { leaderboard.disable() }
                         }))
+                        .font(.system(size: 12, weight: .medium))
                         .toggleStyle(.switch).controlSize(.small)
                         .disabled(leaderboard.state.pendingRemoval)
                     sharingDetails
@@ -45,7 +55,7 @@ struct LeaderboardSettingsView: View {
                 if let error = leaderboard.lastError { Text(error).foregroundStyle(t.warn) }
                 if let origin = website {
                     Link(destination: origin.appendingPathComponent("leaderboard")) {
-                        Label("Open leaderboard", systemImage: "arrow.up.right.square")
+                        Label("Open leaderboard", systemImage: "arrow.up.right")
                     }
                     .foregroundStyle(t.accent).padding(.top, 3)
                 }
@@ -99,8 +109,8 @@ struct LeaderboardSettingsView: View {
                 .padding(.top, 8)
             } label: {
                 Text("Exactly what gets shared")
-                    .fontWeight(.semibold)
-                    .foregroundStyle(t.accent)
+                    .fontWeight(.medium)
+                    .foregroundStyle(t.subtext)
             }
             .tint(t.accent)
         }
@@ -109,7 +119,7 @@ struct LeaderboardSettingsView: View {
 
     private func sharingDetail(_ title: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).fontWeight(.semibold).foregroundStyle(t.subtext)
+            Text(title).fontWeight(.medium).foregroundStyle(t.subtext)
             Text(text).foregroundStyle(t.muted).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -117,7 +127,7 @@ struct LeaderboardSettingsView: View {
 
     private func billingPicker(_ label: String, selection: Binding<LeaderboardBilling>) -> some View {
         HStack {
-            Text(label).font(.caption.weight(.medium))
+            Text(label).font(.system(size: 12)).foregroundStyle(t.subtext)
             Spacer()
             Picker(label, selection: selection) {
                 ForEach(LeaderboardBilling.allCases) { mode in Text(mode.label).tag(mode) }

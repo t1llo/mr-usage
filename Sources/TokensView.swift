@@ -1,4 +1,4 @@
-// The Tokens tab: tokens per hour or day as a bar chart, totals as tiles, split by model.
+// The Tokens tab: softly shaded activity charts, quiet totals, and a per-model breakdown.
 import Charts
 import SwiftUI
 
@@ -10,15 +10,6 @@ extension TokenMetric {
         case .output: return t.cyan
         case .cacheWrite: return t.orange
         case .cacheRead: return t.teal
-        }
-    }
-    var icon: String {
-        switch self {
-        case .cost: return "dollarsign.circle.fill"
-        case .input: return "arrow.down.circle.fill"
-        case .output: return "arrow.up.circle.fill"
-        case .cacheWrite: return "square.and.arrow.down.fill"
-        case .cacheRead: return "arrow.triangle.2.circlepath.circle.fill"
         }
     }
     func help(_ p: Provider) -> String {
@@ -46,14 +37,13 @@ struct TokensView: View {
     @AppStorage("tokenRange") private var range: TokenRange = .week
     @AppStorage("tokenMetric") private var metric: TokenMetric = .cost
     @AppStorage("openAISource") private var source: OpenAISource = .account
-    @State private var hovered: Date?
     @Environment(\.theme) private var t
 
     var body: some View {
         let hasLocal = tokens.records.contains { $0.provider == provider }
         let hasAccount = provider == .openai && tokens.activity != nil
         let account = hasAccount && (source == .account || !hasLocal)
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             if hasAccount && hasLocal {
                 Segmented(options: OpenAISource.allCases, selection: $source) { $0.rawValue }
             }
@@ -103,39 +93,37 @@ struct TokensView: View {
         let r = shown(account)
         let s = tokens.summary(provider, account: account, range: r, metric: metric)
         let est = account ? "est." : nil
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 12) {
+            TokenChartCard(summary: s, metric: metric,
+                           range: Binding(get: { r }, set: { range = $0 }), ranges: ranges(account),
+                           account: account, loading: !tokens.loaded && !account)
+                .id("\(provider.rawValue)/\(account)")
             Card {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .firstTextBaseline) {
-                        readout(s, range: r, account: account)
-                        Spacer()
-                        Segmented(options: ranges(account), selection: Binding(get: { r }, set: { range = $0 })) { $0.rawValue }
+                VStack(alignment: .leading, spacing: 8) {
+                    MetricTile(metric: .cost, value: s.totals[.cost] ?? 0, selected: metric == .cost,
+                               caption: account ? "Estimated at API prices" : "If billed at API prices",
+                               help: account ? costHelp : TokenMetric.cost.help(provider)) { metric = .cost }
+                    Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5)
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 6) {
+                        ForEach(TokenMetric.tokenKinds) { m in
+                            MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == metric, caption: est,
+                                       help: m.help(provider) + (account ? ". Estimated: the account only reports totals." : "")) { metric = m }
+                        }
                     }
-                    if tokens.loaded || account { chart(s, range: r, account: account) } else {
-                        ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 120)
-                    }
-                }
-            }
-            MetricTile(metric: .cost, value: s.totals[.cost] ?? 0, selected: metric == .cost,
-                       caption: account ? "estimated at API prices" : "if billed at API prices",
-                       help: account ? costHelp : metric.help(provider)) { metric = .cost }
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(TokenMetric.tokenKinds) { m in
-                    MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == metric, caption: est,
-                               help: m.help(provider) + (account ? ". Estimated: the account only reports totals." : "")) { metric = m }
                 }
             }
             if !s.byModel.isEmpty { Card { ModelList(rows: s.byModel, metric: metric) } }
             if account, let a = tokens.activity { AccountStats(activity: a) }
             if metric == .cost, !s.unpriced.isEmpty {
                 Text("No API price for \(s.unpriced.sorted().joined(separator: ", ")), left out of the cost")
-                    .font(.caption2).foregroundStyle(t.warn)
-                    .frame(maxWidth: .infinity)
+                    .font(.system(size: 10)).foregroundStyle(t.warn)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(account ? accountNote : footnote(Set(tokens.records.filter { $0.provider == provider }.map(\.source))))
-                .font(.caption2).foregroundStyle(t.muted)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
+                .font(.system(size: 10)).foregroundStyle(t.muted)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
         }
     }
 
@@ -157,37 +145,98 @@ struct TokensView: View {
         if found.isEmpty { return "Reads \(tools.map(\.rawValue).joined(separator: " and ")) logs on this Mac" }
         return "From \(found.map(\.rawValue).joined(separator: " and ")) sessions on this Mac"
     }
+}
+
+/// Data-only chart surface. Each point is one complete hourly or daily bucket, including zeroes.
+struct TokenChartCard: View {
+    let summary: TokenSummary
+    let metric: TokenMetric
+    @Binding var range: TokenRange
+    let ranges: [TokenRange]
+    let account: Bool
+    var loading = false
+    @State private var hovered: Date?
+    @Environment(\.theme) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(metric == .cost ? "API equivalent" : metric.rawValue)
+                        .font(.system(size: 11, weight: .medium)).foregroundStyle(t.subtext)
+                    Spacer(minLength: 8)
+                    Segmented(options: ranges, selection: $range) { $0.rawValue }
+                }
+                readout
+                if loading {
+                    ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 108)
+                } else {
+                    chart
+                }
+            }
+        }
+        .onChange(of: range) { _ in hovered = nil }
+    }
 
     /// Hovered bucket's value, or the range total for the selected metric.
-    private func readout(_ s: TokenSummary, range: TokenRange, account: Bool) -> some View {
-        let b = hovered.flatMap { h in s.buckets.first { $0.start == h } }
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(metric.format(b?.value ?? s.totals[metric] ?? 0))
-                .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
+    private var readout: some View {
+        let b = hovered.flatMap { h in summary.buckets.first { $0.start == h } }
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(metric.format(b?.value ?? summary.totals[metric] ?? 0))
+                .font(.system(size: 30, weight: .medium).monospacedDigit())
+                .tracking(-0.8)
+                .lineLimit(1).minimumScaleFactor(0.7)
                 .contentTransition(.numericText())
-            Text("\(metric == .cost ? "API cost" : metric.rawValue.lowercased()) · \(b.map { bucketLabel($0.start, range: range, account: account) } ?? "last \(range.rawValue)")")
-                .font(.caption).foregroundStyle(t.muted)
+            Text((b.map { bucketLabel($0.start) } ?? "Last \(range.rawValue)")
+                 + (account ? " · estimated" : metric == .cost ? " · at API prices" : " · tokens"))
+                .font(.system(size: 10)).foregroundStyle(t.muted)
         }
     }
 
-    private func bucketLabel(_ d: Date, range: TokenRange, account: Bool) -> String {
+    private func bucketLabel(_ d: Date) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US")
         if account { f.timeZone = usageUTCCalendar.timeZone }
         f.dateFormat = range == .day ? "EEE ha" : "EEE MMM d"
         return f.string(from: d).replacingOccurrences(of: "AM", with: "am").replacingOccurrences(of: "PM", with: "pm")
     }
 
-    private func chart(_ s: TokenSummary, range: TokenRange, account: Bool) -> some View {
-        Chart(s.buckets) { b in
-            BarMark(x: .value("Time", b.start, unit: range.unit), y: .value("Tokens", b.value))
-                .foregroundStyle(metric.color(t))
-                .cornerRadius(2)
-                .opacity(hovered == nil || hovered == b.start ? 1 : 0.4)
+    private var chart: some View {
+        let color = metric.color(t)
+        let valueLabel = metric == .cost ? "API-equivalent cost" : "Tokens"
+        return Chart {
+            ForEach(summary.buckets) { b in
+                AreaMark(x: .value("Time", b.start, unit: range.unit), y: .value(valueLabel, b.value))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(LinearGradient(colors: [color.opacity(0.28), color.opacity(0.015)],
+                                                    startPoint: .top, endPoint: .bottom))
+                    .accessibilityHidden(true)
+                LineMark(x: .value("Time", b.start, unit: range.unit), y: .value(valueLabel, b.value))
+                    .interpolationMethod(.monotone)
+                    .lineStyle(StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
+                    .foregroundStyle(color.opacity(0.9))
+                    .accessibilityLabel(bucketLabel(b.start))
+                    .accessibilityValue(metric.format(b.value))
+            }
+            if let b = summary.buckets.first(where: { $0.start == hovered }) {
+                RuleMark(x: .value("Time", b.start, unit: range.unit))
+                    .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+                    .foregroundStyle(t.subtext.opacity(0.4))
+                    .accessibilityHidden(true)
+                PointMark(x: .value("Time", b.start, unit: range.unit), y: .value(valueLabel, b.value))
+                    .symbolSize(24).foregroundStyle(color)
+                    .accessibilityHidden(true)
+            }
         }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { v in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3])).foregroundStyle(t.border)
-                AxisValueLabel { if let n = v.as(Double.self) { Text(metric == .cost ? "$" + compact(n) : compact(n)).foregroundStyle(t.muted) } }
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(t.border.opacity(0.6))
+                AxisValueLabel {
+                    if let n = v.as(Double.self) {
+                        Text(metric == .cost ? "$" + compact(n) : compact(n))
+                            .font(.system(size: 9)).foregroundStyle(t.muted)
+                    }
+                }
             }
         }
         .chartXAxis {
@@ -201,17 +250,18 @@ struct TokensView: View {
             GeometryReader { g in
                 Rectangle().fill(.clear).contentShape(Rectangle())
                     .onContinuousHover { phase in
+                        let plot = g[proxy.plotAreaFrame]
                         guard case .active(let p) = phase,
-                              let d: Date = proxy.value(atX: p.x - g[proxy.plotAreaFrame].origin.x)
+                              plot.contains(p), let d: Date = proxy.value(atX: p.x - plot.origin.x)
                         else { hovered = nil; return }
                         hovered = (account ? usageUTCCalendar : Calendar.current).dateInterval(of: range.unit, for: d)?.start
                     }
             }
         }
-        .frame(height: 120)
+        .frame(height: 108)
         .environment(\.timeZone, account ? usageUTCCalendar.timeZone : .current)
-        .animation(.easeOut(duration: 0.4), value: metric)
-        .animation(.easeOut(duration: 0.4), value: range)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: metric)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: range)
     }
 }
 
@@ -224,32 +274,54 @@ struct MetricTile: View {
     let help: String
     let action: () -> Void
     @Environment(\.theme) private var t
+    @State private var hovered = false
 
     var body: some View {
         let c = metric.color(t)
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label(metric.rawValue, systemImage: metric.icon)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(selected ? c : t.muted)
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(metric.format(value))
-                        .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-                        .contentTransition(.numericText())
-                    if let caption { Text(caption).font(.caption).foregroundStyle(t.muted) }
+            Group {
+                if metric == .cost {
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("API equivalent").font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(selected ? c : t.subtext)
+                            if let caption { Text(caption).font(.system(size: 9)).foregroundStyle(t.muted) }
+                        }
+                        Spacer(minLength: 0)
+                        valueText
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 5) {
+                            Text(metric.rawValue).font(.system(size: 10)).foregroundStyle(selected ? c : t.muted)
+                            if selected { Circle().fill(c).frame(width: 4, height: 4) }
+                        }
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            valueText
+                            if let caption { Text(caption).font(.system(size: 9)).foregroundStyle(t.muted) }
+                        }
+                    }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(selected ? c.opacity(0.14) : t.card))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(selected ? c.opacity(0.6) : t.border.opacity(0.6), lineWidth: 0.75))
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selected ? c.opacity(0.065) : t.text.opacity(hovered ? 0.035 : 0)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(help)
+        .onHover { hovered = $0 }
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var valueText: some View {
+        Text(metric.format(value))
+            .font(.system(size: 16, weight: .medium).monospacedDigit())
+            .foregroundStyle(t.text)
+            .tracking(-0.3)
+            .lineLimit(1).minimumScaleFactor(0.7)
+            .contentTransition(.numericText())
     }
 }
 
@@ -261,25 +333,29 @@ struct ModelList: View {
     var body: some View {
         let top = rows.prefix(4)
         let total = max(0.000_001, rows.reduce(0) { $0 + $1.value })
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("By model").font(.system(size: 11, weight: .medium)).foregroundStyle(t.subtext)
             ForEach(Array(top), id: \.name) { r in
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 7) {
                     HStack {
-                        Text(r.name).font(.system(size: 12, weight: .medium))
+                        Text(r.name).font(.system(size: 11)).lineLimit(1)
                         Spacer()
                         Text("\(metric.format(r.value)) · \(Int((r.value / total * 100).rounded()))%")
-                            .font(.system(size: 12, design: .rounded).monospacedDigit())
+                            .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(t.muted)
+                            .fixedSize()
                     }
                     GeometryReader { g in
                         ZStack(alignment: .leading) {
                             Capsule().fill(t.track)
-                            Capsule().fill(metric.color(t))
-                                .frame(width: max(4, g.size.width * r.value / total))
+                            Capsule().fill(LinearGradient(colors: [metric.color(t).opacity(0.35), metric.color(t).opacity(0.75)],
+                                                          startPoint: .leading, endPoint: .trailing))
+                                .frame(width: r.value > 0 ? max(3, g.size.width * r.value / total) : 0)
                         }
                     }
-                    .frame(height: 4)
+                    .frame(height: 3)
                 }
+                .help("\(r.name): \(metric.format(r.value))")
             }
         }
     }
@@ -290,34 +366,47 @@ struct ModelList: View {
 struct PlanHistoryCard: View {
     let history: PlanHistory
     @State private var selected: String?
+    @State private var expanded = false
     @Environment(\.theme) private var t
 
     var body: some View {
         let now = Date()
-        let chosen = history.periods.first { $0.id == selected } ?? history.periods[0]
+        let chosen = history.periods.first { $0.id == selected } ?? history.periods.first
         Card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Plan usage", systemImage: "calendar")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(t.subtext)
-                    Spacer()
-                    if let d = history.asOf { Text("as of \(day(d))").font(.caption).foregroundStyle(t.muted) }
-                }
-                ForEach(history.periods.prefix(5)) { p in
-                    Button { withAnimation(.easeOut(duration: 0.2)) { selected = p.id } } label: {
-                        row(p, current: p.end > now, chosen: p.id == chosen.id)
+            VStack(alignment: .leading, spacing: 14) {
+                Button { expanded.toggle() } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Recent plan usage").font(.system(size: 12, weight: .medium)).foregroundStyle(t.subtext)
+                            Text(history.asOf.map { "All devices · updated \(day($0))" } ?? "Across all devices")
+                                .font(.system(size: 10)).foregroundStyle(t.muted)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .medium)).foregroundStyle(t.muted)
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
                     }
-                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
                 }
-                if !chosen.byModel.isEmpty {
-                    Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5)
-                    Text("By model, \(range(chosen))").font(.caption).foregroundStyle(t.muted)
-                    ForEach(chosen.byModel.prefix(4), id: \.name) { m in
-                        HStack {
-                            Text(m.name).font(.system(size: 12, weight: .medium))
-                            Spacer()
-                            Text(pct(m.value)).font(.system(size: 12, design: .rounded).monospacedDigit())
-                                .foregroundStyle(t.muted)
+                .buttonStyle(.plain)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                if expanded {
+                    ForEach(history.periods.prefix(5)) { p in
+                        Button { selected = p.id } label: {
+                            row(p, current: p.end > now, chosen: p.id == chosen?.id)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if let chosen, !chosen.byModel.isEmpty {
+                        Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5)
+                        Text("By model, \(range(chosen))").font(.system(size: 10)).foregroundStyle(t.muted)
+                        ForEach(chosen.byModel.prefix(4), id: \.name) { m in
+                            HStack {
+                                Text(m.name).font(.system(size: 11))
+                                Spacer()
+                                Text(pct(m.value)).font(.system(size: 11).monospacedDigit())
+                                    .foregroundStyle(t.muted)
+                            }
                         }
                     }
                 }
@@ -327,28 +416,19 @@ struct PlanHistoryCard: View {
     }
 
     private func row(_ p: PlanPeriod, current: Bool, chosen: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text(range(p)).font(.system(size: 12, weight: chosen ? .semibold : .regular))
+                Text(range(p)).font(.system(size: 11, weight: chosen ? .medium : .regular))
                 if current {
-                    Text("Now").font(.caption2.weight(.semibold)).foregroundStyle(t.accent)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(t.accent.opacity(0.14)))
+                    Text("Now").font(.system(size: 9)).foregroundStyle(t.accent)
                 }
                 Spacer()
-                Text(pct(p.used)).font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+                Text(pct(p.used)).font(.system(size: 11, weight: .medium).monospacedDigit())
             }
-            GeometryReader { g in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(t.track)
-                    Capsule().fill(t.level(p.used))
-                        .frame(width: p.used > 0 ? max(4, g.size.width * min(1, p.used / 100)) : 0)
-                }
-            }
-            .frame(height: 5)
+            LimitMeter(pct: p.used, marker: nil)
         }
-        .padding(.horizontal, 6).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(chosen ? t.accent.opacity(0.08) : .clear))
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(chosen ? t.text.opacity(0.045) : .clear))
         .contentShape(Rectangle())
     }
 
@@ -379,21 +459,26 @@ struct AccountStats: View {
 
     var body: some View {
         Card {
-            HStack(alignment: .top, spacing: 0) {
-                stat("Lifetime", compact(activity.lifetime), "tokens")
-                stat("Peak day", compact(activity.peakDay), "tokens")
-                stat("Streak", "\(activity.currentStreak)d", "best \(activity.longestStreak)d")
-                if let c = activity.chats { stat("Chats", "\(c)", "all time") }
+            VStack(alignment: .leading, spacing: 14) {
+                Text("All-time activity").font(.system(size: 11, weight: .medium)).foregroundStyle(t.subtext)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 14) {
+                    stat("Lifetime", compact(activity.lifetime), "tokens")
+                    stat("Peak day", compact(activity.peakDay), "tokens")
+                    stat("Streak", "\(activity.currentStreak)d", "best \(activity.longestStreak)d")
+                    if let c = activity.chats { stat("Chats", compact(Double(c)), "all time") }
+                }
             }
         }
         .help(activity.effort.map { "Mostly \($0.name) reasoning (\(Int($0.share.rounded()))% of turns)" } ?? "")
     }
 
     private func stat(_ label: String, _ value: String, _ caption: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(t.muted)
-            Text(value).font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-            Text(caption).font(.caption2).foregroundStyle(t.muted)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.system(size: 10)).foregroundStyle(t.muted)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value).font(.system(size: 15, weight: .medium).monospacedDigit())
+                Text(caption).font(.system(size: 9)).foregroundStyle(t.muted)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

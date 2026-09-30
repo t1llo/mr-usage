@@ -46,7 +46,7 @@ final class MenuBarPanelController: NSObject {
         // Preserve the position saved by the original single MenuBarExtra, including when a
         // menu-bar organizer is installed. A new, unnamed item can otherwise start hidden.
         statusItem.autosaveName = "Item-0"
-        let host = NSHostingView(rootView: content(layout).clipShape(RoundedRectangle(cornerRadius: 12)))
+        let host = NSHostingView(rootView: content(layout).clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)))
         // NSHostingView must not retain a previous page's minimum height or resize the window
         // independently. PanelViewport measures the page; this controller applies the size.
         host.sizingOptions = []
