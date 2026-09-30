@@ -26,9 +26,9 @@ and estimated API costs without leaving your desktop.
 
 ## Demo
 
-[![Mr. Usage demo: exploring token charts, API costs, and plan limits](docs/assets/mr-usage-demo.gif)](docs/assets/mr-usage-demo.mp4)
+[![Mr. Usage promo: install in seconds, live Claude and OpenAI limits, token charts, what your subscription is worth at API prices, and the optional leaderboard](docs/assets/mr-usage-promo.gif)](docs/assets/mr-usage-promo.mp4)
 
-[Watch the full-quality recording](docs/assets/mr-usage-demo.mp4) · 19 seconds · native UI with sample data
+[Watch in full quality](docs/assets/mr-usage-promo.mp4) · 28 seconds · example figures
 
 ## Install
 
