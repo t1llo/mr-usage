@@ -17,7 +17,7 @@ extension TokenMetric {
         case .cost: return p == .claude
             ? "What these tokens would cost at Anthropic API list prices, cache and fast mode included"
             : "What these tokens would cost at OpenAI API list prices (Standard tier), cache included"
-        case .input: return "Uncached input tokens sent to the model"
+        case .input: return "New input not served from or written to the prompt cache. Total prompt input also includes cache reads and writes."
         case .output: return "Tokens the model generated, reasoning included"
         case .cacheWrite: return "Input tokens written to the prompt cache"
         case .cacheRead: return "Input tokens served from the prompt cache"
@@ -40,7 +40,7 @@ struct TokensView: View {
     @Environment(\.theme) private var t
 
     var body: some View {
-        let hasLocal = tokens.records.contains { $0.provider == provider }
+        let hasLocal = !(tokens.providerSources[provider] ?? []).isEmpty
         let hasAccount = provider == .openai && tokens.activity != nil
         let account = hasAccount && (source == .account || !hasLocal)
         VStack(alignment: .leading, spacing: 12) {
@@ -91,10 +91,13 @@ struct TokensView: View {
 
     private func content(account: Bool) -> some View {
         let r = shown(account)
-        let s = tokens.summary(provider, account: account, range: r, metric: metric)
+        let totals = tokens.summary(provider, account: account, range: r, metric: .cost).totals
+        let kinds = TokenMetric.tokenKinds.filter { $0 != .cacheWrite || provider == .claude || (totals[.cacheWrite] ?? 0) > 0 }
+        let selected = metric == .cacheWrite && !kinds.contains(.cacheWrite) ? TokenMetric.input : metric
+        let s = tokens.summary(provider, account: account, range: r, metric: selected)
         let est = account ? "est." : nil
         return VStack(alignment: .leading, spacing: 12) {
-            TokenChartCard(summary: s, metric: metric,
+            TokenChartCard(summary: s, metric: selected,
                            range: Binding(get: { r }, set: { range = $0 }), ranges: ranges(account),
                            account: account, loading: !tokens.loaded && !account)
                 .id("\(provider.rawValue)/\(account)")
@@ -105,21 +108,26 @@ struct TokensView: View {
                                help: account ? costHelp : TokenMetric.cost.help(provider)) { metric = .cost }
                     Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5)
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 6) {
-                        ForEach(TokenMetric.tokenKinds) { m in
-                            MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == metric, caption: est,
+                        ForEach(kinds) { m in
+                            MetricTile(metric: m, value: s.totals[m] ?? 0, selected: m == selected, caption: est,
                                        help: m.help(provider) + (account ? ". Estimated: the account only reports totals." : "")) { metric = m }
                         }
                     }
                 }
             }
-            if !s.byModel.isEmpty { Card { ModelList(rows: s.byModel, metric: metric) } }
+            if provider == .claude {
+                Text("Prompt input: \(compact((s.totals[.input] ?? 0) + (s.totals[.cacheRead] ?? 0) + (s.totals[.cacheWrite] ?? 0))) total. Cache reads and writes are input too; repeated cached context can dwarf new input and output.")
+                    .font(.system(size: 10)).foregroundStyle(t.muted)
+                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 4)
+            }
+            if !s.byModel.isEmpty { Card { ModelList(rows: s.byModel, metric: selected) } }
             if account, let a = tokens.activity { AccountStats(activity: a) }
             if metric == .cost, !s.unpriced.isEmpty {
                 Text("No API price for \(s.unpriced.sorted().joined(separator: ", ")), left out of the cost")
                     .font(.system(size: 10)).foregroundStyle(t.warn)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(account ? accountNote : footnote(Set(tokens.records.filter { $0.provider == provider }.map(\.source))))
+            Text(account ? accountNote : footnote(tokens.providerSources[provider]))
                 .font(.system(size: 10)).foregroundStyle(t.muted)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -130,12 +138,12 @@ struct TokensView: View {
     private var costHelp: String {
         "What these tokens would cost at OpenAI API list prices (Standard tier). The account reports "
             + "total tokens per day and model; the split into input, cache and output is "
-            + (tokens.mixFromLogs ? "taken from this Mac's Codex logs." : "a typical Codex session's (88% cache reads, 10% input, 2% output).")
+            + (tokens.mixFromLogs ? "taken from this Mac's Codex/OpenCode logs." : "a typical Codex session's (88% cache reads, 10% input, 2% output).")
     }
 
     private var accountNote: String {
         "All devices, by UTC day. Local Codex/OpenCode logs fill unreported days without double-counting. Account split and cost estimated from "
-            + (tokens.mixFromLogs ? "this Mac's Codex logs." : "a typical Codex session.")
+            + (tokens.mixFromLogs ? "this Mac's Codex/OpenCode logs." : "a typical Codex session.")
     }
 
     /// Which tools the numbers come from, or where they would come from.
@@ -163,7 +171,7 @@ struct TokenChartCard: View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text(metric == .cost ? "API equivalent" : metric.rawValue)
+                    Text(metric == .cost ? "API equivalent" : metric.label)
                         .font(.system(size: 11, weight: .medium)).foregroundStyle(t.subtext)
                     Spacer(minLength: 8)
                     Segmented(options: ranges, selection: $range) { $0.rawValue }
@@ -294,7 +302,7 @@ struct MetricTile: View {
                 } else {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(spacing: 5) {
-                            Text(metric.rawValue).font(.system(size: 10)).foregroundStyle(selected ? c : t.muted)
+                            Text(metric.label).font(.system(size: 10)).foregroundStyle(selected ? c : t.muted)
                             if selected { Circle().fill(c).frame(width: 4, height: 4) }
                         }
                         HStack(alignment: .firstTextBaseline, spacing: 4) {

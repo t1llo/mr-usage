@@ -31,6 +31,7 @@ actor CodexScanner {
         var prevTotal = Tokens()
         /// Once a file has per-response records, its token_count lines are only used for limits.
         var sawRecord = false
+        var runningKeys: Set<String> = []
     }
 
     /// OpenAI convention: `input` includes cached and cache-write tokens, `output` includes
@@ -58,7 +59,7 @@ actor CodexScanner {
     /// Keyed by response id, or by timestamp and totals for older logs. Forks copy lines into the
     /// child's file, so the same key can appear in several files.
     private var records: [String: TokenRecord] = [:]
-    private var limits: (date: Date, json: [String: Any])?
+    private var limits: [String: (date: Date, json: [String: Any])] = [:]
     private var creditBalance: CodexCredits?
     private let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -93,9 +94,17 @@ actor CodexScanner {
             }
         }
         records = records.filter { $0.value.date >= cutoff }
-        return (Array(records.values), limits.flatMap {
-            parseCodexLogLimits($0.json, asOf: $0.date, lastCredits: creditBalance)
-        }, found)
+        let main = limits["codex"].flatMap { parseCodexLogLimits($0.json, asOf: $0.date, lastCredits: creditBalance) }
+        var usage = main?.usage ?? Usage()
+        for id in limits.keys.sorted() where id != "codex" {
+            let snapshot = limits[id]!
+            let name = snapshot.json["limit_name"] as? String ?? id.replacingOccurrences(of: "_", with: " ")
+            usage.limits += codexWindows(snapshot.json, prefix: "codex_\(id)", label: name,
+                                         logged: true, now: snapshot.date)
+        }
+        let asOf = limits.values.map(\.date).max() ?? creditBalance?.asOf ?? .distantPast
+        let combined = CodexLimits(asOf: asOf, usage: usage, plan: main?.plan, live: false, credits: creditBalance)
+        return (Array(records.values), combined.hasData ? combined : nil, found)
     }
 
     private func read(_ url: URL, state st: inout FileState) -> UInt64 {
@@ -110,10 +119,8 @@ actor CodexScanner {
             let lineEnd = data[lineStart...end].firstIndex(of: 0x0A)!
             let line = data[lineStart..<lineEnd]
             lineStart = lineEnd + 1
-            // The type tags come first on the line; most lines are prompts and tool output, and
-            // skipping them here saves parsing megabytes of JSON.
-            let head = line.prefix(200)
-            guard needles.contains(where: { head.range(of: $0) != nil }) else { continue }
+            // Skip prompts/tool output before JSON parsing, without assuming JSON key order.
+            guard needles.contains(where: { line.range(of: $0) != nil }) else { continue }
             add(line, &st)
         }
         return UInt64(end - data.startIndex + 1)
@@ -133,18 +140,23 @@ actor CodexScanner {
             st.model = model
             if let turn = p["turn_id"] as? String { st.turnModels[turn] = model }
         case "token_usage_record":
-            st.sawRecord = true
             // A fork's copy of its parent's records belongs to the parent thread.
             guard let id = p["response_id"] as? String,
-                  st.thread == nil || p["thread_id"] as? String == st.thread else { return }
+                   st.thread == nil || p["thread_id"] as? String == st.thread else { return }
+            if !st.sawRecord {
+                // New-format records supersede every running-total fallback from this file.
+                for key in st.runningKeys { records.removeValue(forKey: key) }
+                st.runningKeys = []
+                st.sawRecord = true
+            }
             let model = (p["turn_id"] as? String).flatMap { st.turnModels[$0] } ?? st.model
             put("r|\(id)", date: date, model: model, Tokens(p["usage"] as? [String: Any]))
         case "event_msg" where p["type"] as? String == "token_count":
             if let rl = p["rate_limits"] as? [String: Any] {
-                // Other buckets (per-model or "codex_other") share the event; the plan's is "codex".
-                let id = rl["limit_id"] as? String
-                if id == nil || id == "codex" {
-                    if date >= (limits?.date ?? .distantPast) { limits = (date, rl) }
+                let id = rl["limit_id"] as? String ?? "codex"
+                if date >= (limits[id]?.date ?? .distantPast) { limits[id] = (date, rl) }
+                // Only the main plan's bucket owns the account credit balance.
+                if id == "codex" {
                     if date >= (creditBalance?.asOf ?? .distantPast),
                        let credits = parseCodexCredits(rl["credits"], asOf: date, live: false) {
                         creditBalance = credits
@@ -159,7 +171,9 @@ actor CodexScanner {
             // total; that skips limit-only repeats, post-compaction estimates and resets.
             guard !st.sawRecord, total == st.prevTotal + last, last.total > 0,
                   date >= st.forkedAt ?? .distantPast else { return }
-            put("t|\(ts)|\(total.total)|\(last.total)", date: date, model: st.model, last)
+            let key = "t|\(ts)|\(total.total)|\(last.total)"
+            st.runningKeys.insert(key)
+            put(key, date: date, model: st.model, last)
         default:
             return
         }
@@ -180,13 +194,7 @@ actor CodexScanner {
 
 func parseCodexLogLimits(_ json: [String: Any], asOf: Date, lastCredits: CodexCredits? = nil) -> CodexLimits? {
     var usage = Usage()
-    for key in ["primary", "secondary"] {
-        guard let w = json[key] as? [String: Any], let pct = w["used_percent"] as? Double else { continue }
-        let minutes = w["window_minutes"] as? Int
-        let reset = (w["resets_at"] as? Double).map { Date(timeIntervalSince1970: $0) }
-        usage.limits.append(Limit(id: "codex_\(key)", label: windowLabel(minutes), pct: pct,
-                                  resetsAt: reset, window: minutes.map { TimeInterval($0 * 60) }))
-    }
+    usage.limits = codexWindows(json, prefix: "codex", logged: true, now: asOf)
     let limits = CodexLimits(asOf: asOf, usage: usage, plan: json["plan_type"] as? String, live: false,
                              credits: parseCodexCredits(json["credits"], asOf: asOf, live: false) ?? lastCredits)
     return limits.hasData ? limits : nil

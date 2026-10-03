@@ -114,17 +114,39 @@ func parseCodexCredits(_ any: Any?, asOf: Date, live: Bool) -> CodexCredits? {
 
 func parseCodexUsage(_ json: [String: Any], now: Date = Date()) -> CodexLimits {
     var usage = Usage()
-    let rl = json["rate_limit"] as? [String: Any]
-    for key in ["primary_window", "secondary_window"] {
-        guard let w = rl?[key] as? [String: Any], let pct = w["used_percent"] as? Double else { continue }
-        let secs = w["limit_window_seconds"] as? Double ?? 0
-        let minutes = secs > 0 ? Int((secs + 59) / 60) : nil
-        let reset = (w["reset_at"] as? Double).flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0) : nil }
-        usage.limits.append(Limit(id: "codex_\(key)", label: windowLabel(minutes), pct: pct, resetsAt: reset,
-                                  window: secs > 0 ? secs : nil))
+    usage.limits = codexWindows(json["rate_limit"] as? [String: Any], prefix: "codex", now: now)
+    // Model/feature-specific allowances are separate from the main plan's windows.
+    for (index, group) in (json["additional_rate_limits"] as? [[String: Any]] ?? []).enumerated() {
+        let name = group["limit_name"] as? String ?? group["metered_feature"] as? String ?? "Additional limit"
+        let id = group["metered_feature"] as? String ?? name
+        usage.limits += codexWindows(group["rate_limit"] as? [String: Any], prefix: "codex_\(id)_\(index)",
+                                     label: name, now: now)
     }
     return CodexLimits(asOf: now, usage: usage, plan: json["plan_type"] as? String, live: true,
                        credits: parseCodexCredits(json["credits"], asOf: now, live: true))
+}
+
+/// Keep primary/secondary first for the menu bar, then any other server-defined windows.
+func codexWindows(_ json: [String: Any]?, prefix: String, label: String? = nil,
+                  logged: Bool = false, now: Date) -> [Limit] {
+    guard let json else { return [] }
+    let first = logged ? ["primary", "secondary"] : ["primary_window", "secondary_window"]
+    let extra = json.keys.filter { !first.contains($0) && $0.hasSuffix("_window") }.sorted()
+    return (first + extra).compactMap { key in
+        guard let w = json[key] as? [String: Any], let pct = usageNumber(w["used_percent"]),
+              pct.isFinite, pct >= 0 else { return nil }
+        let seconds = logged ? usageNumber(w["window_minutes"]).map { $0 * 60 } : usageNumber(w["limit_window_seconds"])
+        let duration = seconds.flatMap { $0.isFinite && $0 > 0 && $0 < Double(Int.max / 60) ? $0 : nil }
+        let minutes = duration.map { Int(($0 + 59) / 60) }
+        let timestamp = usageNumber(w[logged ? "resets_at" : "reset_at"])
+        let reset = timestamp.flatMap { $0.isFinite && $0 > 0 ? Date(timeIntervalSince1970: $0) : nil }
+            ?? usageNumber(w["reset_after_seconds"]).flatMap {
+                $0.isFinite && $0 > 0 ? now.addingTimeInterval($0) : nil
+            }
+        let name = windowLabel(minutes)
+        return Limit(id: "\(prefix)_\(key)", label: label.map { "\($0) · \(name)" } ?? name,
+                     pct: pct, resetsAt: reset, window: duration)
+    }
 }
 
 // MARK: - Plan history

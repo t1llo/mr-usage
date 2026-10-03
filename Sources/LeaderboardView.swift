@@ -4,8 +4,6 @@ struct LeaderboardSettingsView: View {
     @ObservedObject var leaderboard: LeaderboardStore
     @Environment(\.theme) private var t
     @State private var name = ""
-    @State private var claude: LeaderboardBilling = .unclassified
-    @State private var codex: LeaderboardBilling = .unclassified
     @FocusState private var editingName: Bool
 
     var body: some View {
@@ -27,27 +25,24 @@ struct LeaderboardSettingsView: View {
                                 .strokeBorder(editingName ? t.accent.opacity(0.6) : .clear, lineWidth: 1))
                             .onSubmit { save() }
                     }
-                    billingPicker("Claude", selection: $claude)
-                    billingPicker("OpenAI", selection: $codex)
-                    Text("Choose how each provider’s usage was billed across your tools. OpenAI Subscription uses All devices; API billed uses local logs. Leave mixed or unknown billing unshared. Changes apply to retained history.")
-                        .font(.system(size: 10)).foregroundStyle(t.muted).fixedSize(horizontal: false, vertical: true)
-                    Button("Save profile") { save() }
-                        .buttonStyle(PanelActionButtonStyle())
-                        .disabled(!hasChanges || leaderboard.inFlight || leaderboard.state.pendingRemoval)
                 }
             }
             Card {
                 VStack(alignment: .leading, spacing: 14) {
                     Toggle("Share on leaderboard", isOn: Binding(
-                        get: { leaderboard.state.enabled },
+                        get: { leaderboard.state.enabled && !leaderboard.needsConsent },
                         set: { on in
-                            if on { leaderboard.enable(name: name, claude: claude, codex: codex) }
+                            if on { leaderboard.enable(name: name) }
                             else { leaderboard.disable() }
                         }))
                         .font(.system(size: 12, weight: .medium))
                         .toggleStyle(.switch).controlSize(.small)
                         .disabled(leaderboard.state.pendingRemoval)
                     sharingDetails
+                    if leaderboard.needsConsent {
+                        Button("Remove previous profile") { leaderboard.disable() }
+                            .buttonStyle(PanelActionButtonStyle())
+                    }
                 }
             }
             VStack(alignment: .leading, spacing: 6) {
@@ -66,13 +61,13 @@ struct LeaderboardSettingsView: View {
         }
         .onAppear {
             name = leaderboard.state.displayName
-            claude = leaderboard.state.claudeBilling
-            codex = leaderboard.state.codexBilling
         }
+        .onChange(of: editingName) { focused in if !focused && hasChanges { save() } }
+        .onDisappear { if hasChanges { save() } }
     }
 
     private var hasChanges: Bool {
-        name != leaderboard.state.displayName || claude != leaderboard.state.claudeBilling || codex != leaderboard.state.codexBilling
+        name != leaderboard.state.displayName
     }
 
     private var website: URL? {
@@ -85,7 +80,7 @@ struct LeaderboardSettingsView: View {
 
     private var sharingDetails: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Sends your display name and daily token counts, grouped by provider, model and billing category, to \((website ?? LeaderboardConfiguration.origin).host ?? "the leaderboard"). Includes OpenCode and OpenAI All devices totals.")
+            Text("Shares all Claude and OpenAI usage under your name at \((website ?? LeaderboardConfiguration.origin).host ?? "the leaderboard"). Includes supported local tools and OpenAI All devices totals, counted once.")
                 .foregroundStyle(t.muted)
                 .fixedSize(horizontal: false, vertical: true)
             PanelDisclosure(title: "Exactly what gets shared") {
@@ -93,7 +88,7 @@ struct LeaderboardSettingsView: View {
                     sharingDetail("Uploaded fields", """
                     • Your chosen display name.
                     • UTC date, provider (Claude or OpenAI) and model ID for each daily total.
-                    • Your billing category: Subscription or API billed.
+                    • The website’s API-value board category (legacy name: Subscription); not a billing claim.
                     • Uncached input token count.
                     • Output token count, including reasoning.
                     • Cache-read token count.
@@ -101,9 +96,9 @@ struct LeaderboardSettingsView: View {
                     • Whether token splits and costs come from All devices estimates.
                     """)
                     sharingDetail("Connection data", "A random, leaderboard-only authentication token, data-format version and sharing-consent flag are also sent. Requests include an app identifier; the server also sees your IP address.")
-                    sharingDetail("Counted once", "OpenAI Subscription uses account-wide daily totals, which already cover Codex and OpenCode on that account. Local logs fill only unreported UTC days and are replaced when account totals arrive. Token-kind and model splits are estimated, just like All devices in the app. Claude and API-billed OpenAI use local logs from all supported tools.")
+                    sharingDetail("Counted once", "OpenAI uses account-wide daily totals when available. Local Codex/OpenCode logs fill only unreported UTC days and are replaced when account totals arrive. Token-kind and model splits are estimated, just like All devices in the app. Claude uses local Claude Code and OpenCode logs. Logs cannot reliably identify billing; values are API-price equivalents, not verified spending.")
                     sharingDetail("Shown publicly", "Your name, rank, total tokens, estimated API value/spend, providers, All devices coverage, active days, recent daily usage and last sync time. The website calculates dollar estimates from the counts; these are not subscription charges or verified bills.")
-                    sharingDetail("History and removal", "Syncs about every 5 minutes. Starts with the last 30 UTC days and retains older daily totals for all-time rankings. Providers set to Not shared are excluded. Turning sharing off requests deletion of your profile and uploaded totals; offline removals retry when connected.")
+                    sharingDetail("History and removal", "Syncs about every 5 minutes. Starts with the last 30 UTC days and retains older daily totals for all-time rankings. All supported providers are included. Turning sharing off requests deletion of your profile and uploaded totals; offline removals retry when connected.")
                     sharingDetail("Not uploaded", "Prompts, responses, code, file or project paths, session or request IDs, provider API keys or login tokens, plan limits, credit balances, or payment details.")
                 }
             }
@@ -119,20 +114,8 @@ struct LeaderboardSettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func billingPicker(_ label: String, selection: Binding<LeaderboardBilling>) -> some View {
-        HStack {
-            Text(label).font(.system(size: 12)).foregroundStyle(t.subtext)
-            Spacer()
-            Picker(label, selection: selection) {
-                ForEach(LeaderboardBilling.allCases) { mode in Text(mode.label).tag(mode) }
-            }
-            .labelsHidden().pickerStyle(.menu).frame(width: 135).controlSize(.small)
-            .disabled(leaderboard.state.pendingRemoval)
-        }
-    }
-
     private func save() {
-        leaderboard.saveProfile(name: name, claude: claude, codex: codex)
+        leaderboard.saveProfile(name: name)
         if leaderboard.lastError == nil { name = leaderboard.state.displayName }
     }
 }

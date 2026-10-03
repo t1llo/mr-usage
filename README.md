@@ -83,10 +83,14 @@ Only one instance runs at a time.
 ### Claude
 
 - **Limits:** reads the `Claude Code-credentials` macOS Keychain item through
-  `/usr/bin/security`, then calls the same usage endpoint as Claude Code's `/usage`.
+  `/usr/bin/security`, with OpenCode's unexpired Anthropic OAuth login as a fallback,
+  then calls the same usage endpoint as Claude Code's `/usage`. Authentication reads stay off the UI thread.
 - **Tokens:** reads local transcripts under `~/.claude/projects` and Anthropic messages
   in OpenCode's database. Repeated or streamed copies of a response are counted once.
   These counts cover this Mac, not claude.ai or other computers.
+- **Uncached input** excludes cache reads and writes. Total prompt input includes all three;
+  repeatedly reading cached context can produce large cache totals alongside very little new input.
+  Claude cache writes remain visible. OpenAI's cache-write tile is hidden when zero.
 - The last successful Claude limits and polling cooldown are kept locally across launches.
   During throttling, cached limits retain their original update time and retries wait for the saved deadline.
 - **Costs:** uses the model's API list prices, including cache reads, 5-minute and 1-hour
@@ -97,7 +101,9 @@ Only one instance runs at a time.
 - **Limits:** uses an unexpired Codex token from `$CODEX_HOME/auth.json` (default
   `~/.codex/auth.json`), then OpenCode's ChatGPT OAuth token. If live limits are unavailable,
   the app can show Codex's most recent logged snapshot with its timestamp. Windows whose
-  reset time has passed are cleared.
+  reset time has passed are cleared. Server-defined durations and additional model/feature
+  allowances are displayed without assuming every subscription has the same two windows.
+  Live limits load independently of optional account history.
 - **Credits:** displays OpenAI's usage-credit balance in the Limits tab, including granted
   credits reflected in that balance. Credits are used after included plan usage and are shown
   in credit units. The newest available live or logged balance is shown with its timestamp;
@@ -108,7 +114,7 @@ Only one instance runs at a time.
 - **All devices:** uses ChatGPT's daily account history across CLI, IDE, app, cloud, and
   other machines. Account totals replace overlapping Codex/OpenCode logs for each reported
   **UTC day**; local logs fill only unreported days. The service supplies daily totals and model shares, so input/output/cache
-  splits and costs are **estimates**. They use this Mac's Codex mix when at least 1M tokens
+  splits and costs are **estimates**. They use this Mac's Codex/OpenCode mix when at least 1M tokens
   are available, otherwise a typical mix of 88% cache reads, 10% uncached input, and 2% output.
 - **Costs:** uses OpenAI Standard-tier list prices for prompts under 272K tokens, recomputed
   from counts even when OpenCode records a ChatGPT subscription's cost as zero.
@@ -120,6 +126,7 @@ refreshed by Mr. Usage; Codex and OpenCode manage their own logins.
 ### Timing and limitations
 
 - Local logs are scanned every minute. New installations need a first request before token counts appear.
+- Token summaries are prepared in the background; provider switches and chart hovers use ready-made summaries.
 - Claude live requests start at one-minute intervals; OpenAI live requests at two-minute intervals.
 - Rate limits and server errors increase the interval up to ten minutes, honoring longer
   `Retry-After` delays. Manual refresh follows the same gates. Failures preserve the last good data.
@@ -132,15 +139,17 @@ refreshed by Mr. Usage; Codex and OpenCode manage their own logins.
 ## Leaderboard & privacy
 
 Sharing with [usage.beffa.xyz](https://usage.beffa.xyz) is **off by default**.
-You can save your display name and preferences locally before opting in.
+Your display name is saved locally without opting in.
 
 1. Open **Settings** using the gear beside Refresh.
 2. Enter a display name.
-3. For **Claude** and **OpenAI**, choose **Subscription**, **API billed**, or **Not shared**.
-4. Save your profile, enable **Share on leaderboard**, and choose **Open leaderboard**.
+3. Enable **Share on leaderboard** to share all supported usage under that name.
+4. Choose **Open leaderboard** to see your profile.
 
-Billing choices apply to all retained shared history for that provider across its tools. Logs cannot reliably
-identify the billing method; leave mixed or unknown history unshared.
+There are no provider or billing selectors. Logs cannot reliably identify billing, so shared dollar
+values are API-price equivalents, not verified spending. The existing website protocol groups these
+uploads on its API-value board (currently called **Subscription**); the website itself is a separate deployment.
+Legacy profiles are paused until you opt in to sharing all usage, or remove their previous public profile.
 
 ### Exactly what gets shared
 
@@ -148,12 +157,12 @@ Uploads contain your chosen display name and daily rows with the **UTC date, pro
 model ID, billing category, uncached input tokens, output tokens (including reasoning),
 cache-read tokens, separate 5-minute and 1-hour cache-write counts, and an account-estimate flag**.
 
-- **OpenAI Subscription** shares the same reconciled **All devices** usage as the app.
+- **OpenAI** shares the same reconciled **All devices** usage as the app when available.
   Reported account days replace all overlapping local Codex/OpenCode models, rather than
   adding both sources. Local logs fill unreported UTC days until account totals arrive.
   The website marks these account-wide estimates; token-kind and model splits are estimates.
 - **Claude** includes Claude Code and OpenCode logs on this Mac.
-- **API-billed OpenAI** includes local Codex and OpenCode logs, without subscription account history.
+- When OpenAI account history is unavailable, local Codex and OpenCode logs supply its counts.
 
 Requests also include a dedicated leaderboard authentication token, data-format version,
 sharing-consent flag, and app identifier. The server sees your connection's IP address.
@@ -200,6 +209,7 @@ your own signing identity. Quit a running copy before launching a rebuild.
 ```sh
 swift build --product ClaudeUsageBar
 sh scripts/test-leaderboard.sh
+sh scripts/test-token-readers.sh
 sh scripts/test-openai-credits.sh
 sh scripts/test-claude-polling.sh
 sh scripts/test-panel-layout.sh
@@ -235,6 +245,7 @@ The check fails if secrets are detected and redacts secret values from its outpu
 - `scripts/build.sh`, `scripts/sign-app.sh`: app packaging and inside-out signing.
 - `scripts/build-icons.sh`: macOS icon generation from the artwork in `docs/assets/`.
 - `scripts/test-leaderboard.sh`: isolated sharing tests.
+- `scripts/test-token-readers.sh`: synthetic Claude, Codex and OpenCode reader/normalization checks.
 - `scripts/test-openai-credits.sh`: credit parsing and isolated Codex-log checks.
 - `scripts/test-claude-polling.sh`: cached limits, restart-safe cooldowns and Retry-After checks.
 - `scripts/test-panel-layout.sh`: native popup resizing and interaction checks.

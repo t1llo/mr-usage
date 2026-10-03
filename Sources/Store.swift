@@ -41,7 +41,7 @@ final class Store: ObservableObject {
         Task {
             defer { polling.save(to: defaults); inFlight = false }
             do {
-                if let fresh = await Task.detached(operation: readKeychainToken).value { cachedToken = fresh }
+                if let fresh = await Task.detached(operation: readClaudeToken).value { cachedToken = fresh }
                 guard let token = cachedToken else { throw FetchError.noToken }
                 let fresh = try await fetchUsage(token: token)
                 polling.succeeded(fresh, at: Date())

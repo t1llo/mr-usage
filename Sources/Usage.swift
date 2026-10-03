@@ -12,13 +12,19 @@ struct Limit: Identifiable, Codable {
 struct Credits: Codable { let usedCents: Double; let limitCents: Double? }
 struct Usage: Codable { var limits: [Limit] = []; var credits: Credits? }
 
+/// JSON numeric fields can be integral or fractional, but booleans are not counts.
+func usageNumber(_ any: Any?) -> Double? {
+    guard let number = any as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+    return number.doubleValue
+}
+
 enum FetchError: LocalizedError {
     case noToken
     case http(Int, retryAfter: TimeInterval?, message: String?)
     case badJSON
     var errorDescription: String? {
         switch self {
-        case .noToken: return "not logged in, run `claude` and /login"
+        case .noToken: return "no Claude login found; sign in with Claude Code or OpenCode"
         case .http(401, _, _): return "login expired, open Claude Code once"
         case .http(429, _, _): return "rate limited"
         case .http(let code, _, let m): return "HTTP \(code)" + (m.map { " (\($0))" } ?? "")
@@ -57,7 +63,30 @@ func readKeychainToken() -> String? {
           let root = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
           let oauth = root["claudeAiOauth"] as? [String: Any]
     else { return nil }
-    return oauth["accessToken"] as? String
+    return claudeOAuthToken(oauth)
+}
+
+/// Read-only fallback for people who use Claude through OpenCode, not Claude Code.
+func readClaudeToken() -> String? {
+    if let token = readKeychainToken() { return token }
+    guard let data = try? Data(contentsOf: openCodeDataDirectory.appendingPathComponent("auth.json")),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let oauth = root["anthropic"] as? [String: Any], oauth["type"] as? String == "oauth" else { return nil }
+    return claudeOAuthToken(oauth, openCode: true)
+}
+
+var openCodeDataDirectory: URL {
+    let base = ProcessInfo.processInfo.environment["XDG_DATA_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share")
+    return base.appendingPathComponent("opencode")
+}
+
+func claudeOAuthToken(_ json: [String: Any], openCode: Bool = false, now: Date = Date()) -> String? {
+    // Both tools store expiry in milliseconds. Never consume their refresh tokens.
+    if let expiry = json[openCode ? "expires" : "expiresAt"] as? Double,
+       (!expiry.isFinite || Date(timeIntervalSince1970: expiry / 1000) <= now) { return nil }
+    guard let token = json[openCode ? "access" : "accessToken"] as? String, !token.isEmpty else { return nil }
+    return token
 }
 
 func fetchUsage(token: String) async throws -> Usage {
@@ -76,7 +105,9 @@ func fetchUsage(token: String) async throws -> Usage {
         throw FetchError.http(code, retryAfter: retry, message: message)
     }
     guard let json else { throw FetchError.badJSON }
-    return parse(json)
+    let usage = parse(json)
+    guard !usage.limits.isEmpty || usage.credits != nil else { throw FetchError.badJSON }
+    return usage
 }
 
 /// Retry-After may be a delay in seconds or an HTTP date. Honor either form, including
@@ -94,14 +125,21 @@ func retryAfterDelay(_ value: String?, now: Date = Date()) -> TimeInterval? {
 func parse(_ json: [String: Any]) -> Usage {
     var usage = Usage()
     let week: TimeInterval = 7 * 86_400
-    let keys: [(String, String, TimeInterval)] = [
+    var keys: [(String, String, TimeInterval)] = [
         ("five_hour", "Session", 5 * 3600),
         ("seven_day", "Week", week),
         ("seven_day_sonnet", "Week · Sonnet", week),
         ("seven_day_opus", "Week · Opus", week),
     ]
+    let known = Set(keys.map { $0.0 })
+    for key in json.keys.sorted() where !known.contains(key) && (key.hasPrefix("seven_day_") || key.hasPrefix("five_hour_")) {
+        let weekly = key.hasPrefix("seven_day_")
+        let name = String(key.dropFirst(10)).replacingOccurrences(of: "_", with: " ").capitalized
+        keys.append((key, "\(weekly ? "Week" : "Session") · \(name)", weekly ? week : 5 * 3600))
+    }
     for (key, label, window) in keys {
-        guard let d = json[key] as? [String: Any], let pct = d["utilization"] as? Double else { continue }
+        guard let d = json[key] as? [String: Any], let pct = usageNumber(d["utilization"]),
+              pct.isFinite, pct >= 0 else { continue }
         usage.limits.append(Limit(id: key, label: label, pct: pct, resetsAt: isoDate(d["resets_at"]), window: window))
     }
     if let e = json["extra_usage"] as? [String: Any], e["is_enabled"] as? Bool == true,

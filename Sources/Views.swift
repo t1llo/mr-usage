@@ -289,22 +289,20 @@ struct UsagePanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 limitCards(cx.current(now: now), now: now)
                 if let credits = tokens.codexCredits { OpenAICreditsCard(credits: credits) }
-                Text([cx.plan.map { "ChatGPT " + planName($0) }, cx.live ? "live" : "from Codex logs, \(dayClock(cx.asOf))"]
+                Text([cx.plan.map { "ChatGPT " + planName($0) }, cx.live ? "updated \(dayClock(cx.asOf))" : "from Codex logs, \(dayClock(cx.asOf))"]
                         .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption2).foregroundStyle(t.muted)
                     .frame(maxWidth: .infinity)
-                    .help(cx.live ? "Fetched from ChatGPT with Codex's login"
+                    .help(cx.live ? "Fetched from ChatGPT with Codex or OpenCode’s login"
                           : "Codex logs your plan's limits with every request, so use elsewhere (OpenCode, ChatGPT) shows up after your next Codex request.")
-                if !cx.live, let e = tokens.liveError { ErrorBanner(text: "Live limits unavailable: \(e).") }
+                if let e = tokens.liveError { ErrorBanner(text: "Live limits unavailable: \(e). Showing the last reading.") }
                 if let h = tokens.planHistory { PlanHistoryCard(history: h) }
             }
         } else {
-            EmptyState(loading: !tokens.loaded, text: !tokens.loaded ? "Reading Codex logs…"
-                : tokens.sources.contains(.codex)
-                    ? "Codex hasn't logged any limits yet. They show up after your next Codex request."
-                    : tokens.sources.contains(.opencode)
-                        ? "OpenCode doesn't record ChatGPT limits. Run Codex CLI once to see them; token usage is in the Tokens tab."
-                        : "No Codex CLI logs in ~/.codex. Sign in to Codex with your ChatGPT account and run it once.")
+            EmptyState(loading: tokens.checkingLive || !tokens.loaded, text: tokens.checkingLive ? "Fetching ChatGPT limits…"
+                : tokens.liveError.map { "Live limits unavailable: \($0). API-key logins have no subscription limits." }
+                ?? (!tokens.loaded ? "Reading local usage…"
+                    : "No subscription limits yet. Sign in to Codex or OpenCode with your ChatGPT account. API-key logins have no subscription limits."))
         }
     }
 

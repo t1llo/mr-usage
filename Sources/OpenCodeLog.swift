@@ -7,9 +7,7 @@ import SQLite3
 
 actor OpenCodeReader {
     static var dataDir: URL {
-        let base = ProcessInfo.processInfo.environment["XDG_DATA_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share")
-        return base.appendingPathComponent("opencode")
+        openCodeDataDirectory
     }
 
     /// Release builds write opencode.db, dev builds opencode-<channel>.db.

@@ -27,8 +27,7 @@ struct LeaderboardTests {
         var state = LeaderboardState()
         state.displayName = "fixture"
         state.archive = again
-        assert(leaderboardSnapshot(state).buckets.isEmpty, "Unclassified history stays local")
-        state.claudeBilling = .subscription
+        assert(leaderboardSnapshot(state).buckets.count == again.count, "One opt-in shares both providers, independent of legacy billing selections")
         let encoded = try JSONEncoder().encode(leaderboardSnapshot(state))
         let json = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
         assert(Set(json.keys) == ["schemaVersion", "consent", "displayName", "buckets"])
@@ -82,8 +81,10 @@ struct LeaderboardTests {
         var changedBilling = state
         changedBilling.archive = combined
         changedBilling.codexBilling = .api
-        assert(leaderboardSnapshot(changedBilling).buckets.allSatisfy { $0.estimated != true },
-               "A billing edit must not relabel archived subscription estimates as API spend")
+        assert(leaderboardSnapshot(changedBilling).buckets.contains { $0.estimated == true },
+               "Legacy billing selections must not exclude account usage from all-usage sharing")
+        assert(leaderboardSnapshot(changedBilling).buckets.allSatisfy { $0.billing == "subscription" },
+               "Unified sharing belongs to the API-value board, never the verified-spend board")
         let migrated = try JSONDecoder().decode(SharedUsageBucket.self, from: Data("""
         {"day":"2023-01-01","provider":"codex","model":"gpt-5.1","billing":"subscription","inputTokens":12,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0,"cacheWrite1hTokens":0}
         """.utf8))
@@ -114,7 +115,7 @@ struct LeaderboardTests {
         let draftURL = draftFolder.appendingPathComponent("state.json")
         let draftRecords = PassthroughSubject<TokenSnapshot, Never>()
         let draft = LeaderboardStore(usage: draftRecords.eraseToAnyPublisher(), stateURL: draftURL)
-        draft.saveProfile(name: "  café.codes  ", claude: .unclassified, codex: .unclassified)
+        draft.saveProfile(name: "  café.codes  ")
         draftRecords.send(TokenSnapshot(local: [record]))
         assert(draft.lastError == nil)
         assert(!draft.state.enabled && !draft.inFlight && draft.state.token.isEmpty)
@@ -122,15 +123,35 @@ struct LeaderboardTests {
         let restored = LeaderboardStore(usage: draftRecords.eraseToAnyPublisher(), stateURL: draftURL)
         assert(restored.state.displayName == "café.codes")
         assert(restored.state.claudeBilling == .unclassified && !restored.state.enabled)
-        restored.saveProfile(name: "builder", claude: .subscription, codex: .api)
+        restored.saveProfile(name: "builder")
         let saved = try Data(contentsOf: draftURL)
         let profile = try JSONDecoder().decode(LeaderboardState.self, from: saved)
-        assert(profile.displayName == "builder" && profile.claudeBilling == .subscription && profile.codexBilling == .api)
+        assert(profile.displayName == "builder")
         assert(!profile.enabled && profile.token.isEmpty)
-        restored.saveProfile(name: "!", claude: .api, codex: .unclassified)
+        restored.saveProfile(name: "!")
         let afterInvalidEdit = try Data(contentsOf: draftURL)
         assert(restored.lastError != nil && afterInvalidEdit == saved, "Invalid edits must preserve the saved profile")
         print("PASS: local profile persistence without sharing and invalid-edit preservation")
+
+        let legacyURL = draftFolder.appendingPathComponent("legacy.json")
+        var legacy = LeaderboardState()
+        legacy.enabled = true
+        legacy.claudeBilling = .subscription
+        legacy.displayName = "old-profile"
+        legacy.website = "http://127.0.0.1:0"
+        legacy.token = "legacy-identity"
+        try JSONEncoder().encode(legacy).write(to: legacyURL)
+        let legacyStore = LeaderboardStore(usage: draftRecords.eraseToAnyPublisher(), stateURL: legacyURL)
+        draftRecords.send(TokenSnapshot(local: local, account: [account]))
+        assert(legacyStore.needsConsent && !legacyStore.inFlight,
+               "Do not silently expand a previously selected provider's upload consent")
+        assert(legacyStore.state.token == legacy.token && legacyStore.state.enabled,
+               "Keep the identity so the previous public profile can be updated or removed")
+        let optIn = LeaderboardStore(usage: PassthroughSubject<TokenSnapshot, Never>().eraseToAnyPublisher(),
+                                    stateURL: draftFolder.appendingPathComponent("all-usage.json"))
+        optIn.enable(name: "all-usage", website: "http://127.0.0.1:0")
+        assert(optIn.state.enabled && optIn.state.sharesAllUsage == true && !optIn.inFlight)
+        print("PASS: name-only opt-in and explicit legacy sharing migration")
 
         // Optional real end-to-end sync against the website's local preview.
         guard let origin = ProcessInfo.processInfo.environment["LEADERBOARD_TEST_ORIGIN"] else { return }
@@ -142,7 +163,7 @@ struct LeaderboardTests {
         records.send(TokenSnapshot(local: local, account: [account]))
         assert(!store.state.enabled && !FileManager.default.fileExists(atPath: stateURL.path))
         let name = "test-" + UUID().uuidString.prefix(12)
-        store.enable(name: name, website: origin, claude: .subscription, codex: .subscription)
+        store.enable(name: name, website: origin)
         try await wait { store.state.lastSynced != nil && !store.inFlight }
         assert(store.lastError == nil, store.lastError ?? "")
         assert(store.state.token.count == 64)
@@ -154,7 +175,7 @@ struct LeaderboardTests {
         assert(entry["estimatedTokens"] as! Int == 3_200_000)
         assert(abs((entry["costUsd"] as! Double) - 9.420125) < 0.000001)
         // Removal requested while another write is queued/in flight must win.
-        store.enable(name: name, website: origin, claude: .subscription, codex: .subscription)
+        store.enable(name: name, website: origin)
         store.disable()
         try await wait { !store.state.pendingRemoval && !store.inFlight }
         let (removed, _) = try await URLSession.shared.data(from: url)
@@ -170,7 +191,7 @@ struct LeaderboardTests {
         let offline = LeaderboardStore(usage: records.eraseToAnyPublisher(), stateURL: offlineURL)
         // With no records emitted to this new subscriber, opt-in is saved but no
         // upload starts. Removal must persist even with an unreachable server.
-        offline.enable(name: "offline-fixture", website: "http://127.0.0.1:0", claude: .subscription, codex: .unclassified)
+        offline.enable(name: "offline-fixture", website: "http://127.0.0.1:0")
         offline.disable()
         try await wait { !offline.inFlight }
         let pending = try JSONDecoder().decode(LeaderboardState.self, from: Data(contentsOf: offlineURL))

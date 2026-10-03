@@ -8,16 +8,9 @@ enum LeaderboardConfiguration {
     static let origin = URL(string: "https://usage.beffa.xyz")!
 }
 
-enum LeaderboardBilling: String, Codable, CaseIterable, Identifiable {
+/// Retained only to decode old profiles; unified sharing has no billing selectors.
+enum LeaderboardBilling: String, Codable {
     case unclassified, subscription, api
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .unclassified: return "Not shared"
-        case .subscription: return "Subscription"
-        case .api: return "API billed"
-        }
-    }
 }
 
 struct SharedUsageBucket: Codable {
@@ -48,6 +41,8 @@ struct LeaderboardState: Codable {
     var website = ""
     var claudeBilling: LeaderboardBilling = .unclassified
     var codexBilling: LeaderboardBilling = .unclassified
+    /// Missing in legacy profiles: expanding their selected providers requires fresh consent.
+    var sharesAllUsage: Bool?
     var enabled = false
     var pendingRemoval = false
     var token = ""
@@ -143,12 +138,11 @@ func archiveLeaderboardUsage(_ records: [TokenRecord], account: [TokenRecord] = 
 }
 
 func leaderboardSnapshot(_ state: LeaderboardState) -> LeaderboardSnapshot {
-    let buckets = state.archive.compactMap { bucket -> SharedUsageBucket? in
-        let mode = bucket.provider == "claude" ? state.claudeBilling : state.codexBilling
-        guard mode != .unclassified else { return nil }
-        guard bucket.estimated != true || mode == .subscription else { return nil }
+    let buckets = state.archive.map { bucket -> SharedUsageBucket in
         var shared = bucket
-        shared.billing = mode.rawValue
+        // The deployed protocol calls its API-equivalent-value board "subscription".
+        // This is a board grouping, not evidence of how a local request was billed.
+        shared.billing = "subscription"
         shared.estimated = bucket.estimated ?? false
         return shared
     }
@@ -168,6 +162,7 @@ final class LeaderboardStore: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var nextAttemptAt = Date.distantPast
     @Published private(set) var status = "Sharing is off. Your usage stays on this Mac."
+    var needsConsent: Bool { state.enabled && state.sharesAllUsage != true }
 
     private let stateURL: URL
     private var latestUsage: TokenSnapshot?
@@ -188,6 +183,7 @@ final class LeaderboardStore: ObservableObject {
             catch { lastError = "Couldn’t read leaderboard settings. Sharing is paused: \(error.localizedDescription)" }
         }
         if state.pendingRemoval { status = "Removal pending. Retrying when connected." }
+        else if needsConsent { status = "Sharing paused. Turn on sharing to include all usage, or remove your previous profile." }
         else if state.enabled { status = "Waiting for usage to load…" }
         subscription = usage.sink { [weak self] usage in
             self?.latestUsage = usage
@@ -199,17 +195,15 @@ final class LeaderboardStore: ObservableObject {
         tick() // Pending removals do not need to wait for the scanners.
     }
 
-    func saveProfile(name: String, claude: LeaderboardBilling, codex: LeaderboardBilling) {
+    func saveProfile(name: String) {
         guard !state.pendingRemoval else { return }
-        if state.enabled {
-            enable(name: name, website: state.website, claude: claude, codex: codex)
+        if state.enabled && !needsConsent {
+            enable(name: name, website: state.website)
             return
         }
         do {
             var next = state
             next.displayName = try leaderboardDisplayName(name)
-            next.claudeBilling = claude
-            next.codexBilling = codex
             try persist(next)
             state = next
             lastError = nil
@@ -217,26 +211,23 @@ final class LeaderboardStore: ObservableObject {
         } catch { lastError = error.localizedDescription }
     }
 
-    func enable(name: String, claude: LeaderboardBilling, codex: LeaderboardBilling) {
-        enable(name: name, website: LeaderboardConfiguration.origin.absoluteString, claude: claude, codex: codex)
+    func enable(name: String) {
+        let website = state.enabled ? state.website : LeaderboardConfiguration.origin.absoluteString
+        enable(name: name, website: website)
     }
 
-    func enable(name: String, website: String, claude: LeaderboardBilling, codex: LeaderboardBilling) {
+    func enable(name: String, website: String) {
         guard !state.pendingRemoval else { return }
         do {
             let origin = try leaderboardOrigin(website).absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let displayName = try leaderboardDisplayName(name)
-            guard claude != .unclassified || codex != .unclassified else {
-                throw LeaderboardError.message("Choose a billing category for at least one provider.")
-            }
             if state.enabled, origin != state.website {
                 throw LeaderboardError.message("Turn off sharing and finish removal before changing websites.")
             }
             var next = state
             next.displayName = displayName
             next.website = origin
-            next.claudeBilling = claude
-            next.codexBilling = codex
+            next.sharesAllUsage = true
             if next.token.isEmpty {
                 var bytes = [UInt8](repeating: 0, count: 32)
                 guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
@@ -269,7 +260,7 @@ final class LeaderboardStore: ObservableObject {
 
     func tick() {
         guard !inFlight, Date() >= nextAttemptAt else { return }
-        guard state.pendingRemoval || (state.enabled && latestUsage != nil) else { return }
+        guard state.pendingRemoval || (state.enabled && !needsConsent && latestUsage != nil) else { return }
         inFlight = true
         Task {
             let removing = state.pendingRemoval
@@ -284,9 +275,8 @@ final class LeaderboardStore: ObservableObject {
                 if !removing {
                     let usage = latestUsage ?? TokenSnapshot(local: [])
                     let previous = state.archive
-                    let includeAccount = state.codexBilling == .subscription
                     let archive = await Task.detached {
-                        archiveLeaderboardUsage(usage.local, account: usage.account, previous: previous, includeAccount: includeAccount)
+                        archiveLeaderboardUsage(usage.local, account: usage.account, previous: previous)
                     }.value
                     // The user can opt out while aggregation is running.
                     guard state.enabled else { inFlight = false; tick(); return }

@@ -32,6 +32,34 @@ struct OpenAICreditsTests {
         assert(!parseCodexUsage(["credits": [:]], now: now).hasData)
         print("PASS: credit units, string/numeric balances, zero, negative, unlimited and unavailable values")
 
+        let window: [String: Any] = ["used_percent": 12.0, "limit_window_seconds": 300 * 60,
+                                     "reset_at": now.addingTimeInterval(600).timeIntervalSince1970]
+        let dayWindow: [String: Any] = ["used_percent": 34.0, "limit_window_seconds": 86_400,
+                                        "reset_after_seconds": 1200]
+        let plan = parseCodexUsage([
+            "plan_type": "prolite",
+            "rate_limit": ["primary_window": window, "secondary_window": dayWindow,
+                           "tertiary_window": ["used_percent": 56.0, "limit_window_seconds": 7 * 86_400]],
+            "additional_rate_limits": [
+                ["limit_name": "Fast model", "metered_feature": "fast_model", "rate_limit": ["primary_window": window]],
+                ["limit_name": "Other model", "metered_feature": "other_model", "rate_limit": ["secondary_window": dayWindow]],
+                ["limit_name": "No allowance", "rate_limit": NSNull()]
+            ]
+        ], now: now)
+        assert(plan.usage.limits.map(\.label) == ["Session", "Day", "Week", "Fast model · Session", "Other model · Day"],
+               "Unexpected labels: \(plan.usage.limits.map(\.label))")
+        assert(plan.usage.limits[1].resetsAt == now.addingTimeInterval(1200))
+        assert(plan.usage.limits[1].window == 86_400 && plan.plan == "prolite")
+        assert(Set(plan.usage.limits.map(\.id)).count == 5)
+        let additionalOnly = parseCodexUsage(["additional_rate_limits": [
+            ["limit_name": "Model", "rate_limit": ["primary_window": window]]
+        ]], now: now)
+        assert(additionalOnly.hasData && additionalOnly.usage.limits.count == 1)
+        let invalid = parseCodexUsage(["rate_limit": ["primary_window": ["used_percent": Double.nan],
+            "secondary_window": ["used_percent": -1.0]]], now: now)
+        assert(!invalid.hasData)
+        print("PASS: server-defined daily/weekly windows, additional feature groups, reset delays and malformed values")
+
         var logged = response("80.25")
         let captured = now.addingTimeInterval(-60)
         logged["primary"] = ["used_percent": 95.0, "window_minutes": 300,
@@ -77,6 +105,8 @@ struct OpenAICreditsTests {
         assert(initialScan.found && initialScan.records.isEmpty)
         assert(initialScan.limits?.credits?.balance == 80.25,
                "A newer snapshot without credits and another bucket must not erase the saved balance")
+        assert(initialScan.limits?.usage.limits.count == 2,
+               "Additional logged buckets must be shown without replacing the main plan or its credits")
         let handle = try FileHandle(forWritingTo: log)
         try handle.seekToEnd()
         try handle.write(contentsOf: Data("\n".utf8))

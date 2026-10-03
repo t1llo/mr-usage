@@ -44,10 +44,15 @@ actor TokenScanner {
     static let horizon: TimeInterval = 31 * 86_400
 
     private var offsets: [String: UInt64] = [:]
-    /// Keyed by message id + request id. One response is written as several lines (one per
+    /// Keyed by API message id. One response is written as several lines (one per
     /// content block, the output count growing as it streams), and resumed sessions copy
     /// earlier lines into a new file, so the same key shows up many times. Keep the largest.
     private var records: [String: TokenRecord] = [:]
+    private var fastResponses: Set<String> = []
+    private let root: URL
+    init(root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")) {
+        self.root = root
+    }
     private let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -55,7 +60,6 @@ actor TokenScanner {
     }()
 
     func scan() -> [TokenRecord] {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
         let cutoff = Date().addingTimeInterval(-Self.horizon)
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
         if let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys) {
@@ -69,6 +73,7 @@ actor TokenScanner {
             }
         }
         records = records.filter { $0.value.date >= cutoff }
+        fastResponses = fastResponses.intersection(records.keys)
         return Array(records.values)
     }
 
@@ -97,21 +102,26 @@ actor TokenScanner {
               d["type"] as? String == "assistant",
               let m = d["message"] as? [String: Any],
               let u = m["usage"] as? [String: Any],
-              let ts = d["timestamp"] as? String, let date = iso.date(from: ts),
+              let ts = d["timestamp"] as? String, let date = iso.date(from: ts) ?? isoDate(ts),
               let model = m["model"] as? String, model != "<synthetic>"
         else { return }
-        let key = "\(m["id"] as? String ?? "")|\(d["requestId"] as? String ?? d["uuid"] as? String ?? "")"
-        let input = u["input_tokens"] as? Int ?? 0
-        let output = u["output_tokens"] as? Int ?? 0
-        let cacheWrite = u["cache_creation_input_tokens"] as? Int ?? 0
-        let cacheRead = u["cache_read_input_tokens"] as? Int ?? 0
+        // Content blocks have different transcript UUIDs, even when requestId is absent.
+        // The API message id identifies the response across blocks and resumed copies.
+        guard let key = m["id"] as? String ?? d["requestId"] as? String ?? d["uuid"] as? String,
+              !key.isEmpty else { return }
+        let old = records[key]
+        let input = max(old?.input ?? 0, max(0, u["input_tokens"] as? Int ?? 0))
+        let output = max(old?.output ?? 0, max(0, u["output_tokens"] as? Int ?? 0))
+        let cacheWrite = max(old?.cacheWrite ?? 0, max(0, u["cache_creation_input_tokens"] as? Int ?? 0))
+        let cacheRead = max(old?.cacheRead ?? 0, max(0, u["cache_read_input_tokens"] as? Int ?? 0))
         // The TTL split matters for cost (1-hour writes cost more); without it, assume 5-minute.
-        let write1h = min(cacheWrite, (u["cache_creation"] as? [String: Any])?["ephemeral_1h_input_tokens"] as? Int ?? 0)
+        let write1h = min(cacheWrite, max(old?.cacheWrite1h ?? 0,
+            max(0, (u["cache_creation"] as? [String: Any])?["ephemeral_1h_input_tokens"] as? Int ?? 0)))
+        if u["speed"] as? String == "fast" { fastResponses.insert(key) }
         let cost = apiCost(model: model, input: input, output: output, cacheWrite5m: cacheWrite - write1h,
-                           cacheWrite1h: write1h, cacheRead: cacheRead, fast: u["speed"] as? String == "fast")
-        let r = TokenRecord(date: date, model: model, provider: .claude, source: .claudeCode, input: input, output: output,
+                           cacheWrite1h: write1h, cacheRead: cacheRead, fast: fastResponses.contains(key))
+        let r = TokenRecord(date: min(old?.date ?? date, date), model: model, provider: .claude, source: .claudeCode, input: input, output: output,
                             cacheWrite: cacheWrite, cacheRead: cacheRead, cost: cost, cacheWrite1h: write1h)
-        if let old = records[key], old.output >= r.output { return }
         records[key] = r
     }
 }
@@ -126,8 +136,9 @@ final class TokenStore: ObservableObject {
     }
     /// A rate-limit snapshot can omit credits; use the newest balance that is actually present.
     var codexCredits: CodexCredits? {
-        [liveLimits?.credits, loggedLimits?.credits].compactMap { $0 }.max { $0.asOf < $1.asOf }
+        [liveCredits, loggedLimits?.credits].compactMap { $0 }.max { $0.asOf < $1.asOf }
     }
+    @Published private var liveCredits: CodexCredits?
     @Published private(set) var liveLimits: CodexLimits?
     @Published private(set) var loggedLimits: CodexLimits?
     /// Why the live fetch is not working, shown under the limits. Nil when it works or when
@@ -142,22 +153,28 @@ final class TokenStore: ObservableObject {
     private var estimatedAccountRecords: [TokenRecord] = []
     @Published private(set) var sharingSnapshot: TokenSnapshot?
     private var checkedAccount = false
-    /// Whether the estimated split of `accountRecords` comes from this Mac's Codex logs.
+    /// Whether the estimated split of `accountRecords` comes from this Mac's OpenAI logs.
     private(set) var mixFromLogs = false
     /// Summaries are asked for on every redraw (hover, provider switch), and a 30-day one over
     /// thousands of records takes a frame's worth of time, so each is computed once per data change.
-    private var summaries: [SummaryKey: TokenSummary] = [:]
+    @Published private var summaries: [SummaryKey: TokenSummary] = [:]
+    private var aggregationGeneration = 0
+    private var aggregating = false
+    private(set) var providerSources: [Provider: Set<Source>] = [:]
     private struct SummaryKey: Hashable {
-        let provider: Provider, account: Bool, range: TokenRange, metric: TokenMetric, bucket: Date
+        let provider: Provider, account: Bool, range: TokenRange, metric: TokenMetric
     }
     private var nextHistoryAt = Date.distantPast
     private var liveInterval: TimeInterval = 120
     private var nextLiveAt = Date.distantPast
     private var fetchingLive = false
+    @Published private(set) var checkingLive = false
     /// Tools that have logs on this Mac, even if nothing falls inside the chart range.
     @Published private(set) var sources: Set<Source> = []
     @Published private(set) var loaded = false
+    private var scanned = false
     private var scanning = false
+    private var nextScanAt = Date.distantPast
     private let claude = TokenScanner()
     private let codex = CodexScanner()
     private let opencode = OpenCodeReader()
@@ -172,8 +189,10 @@ final class TokenStore: ObservableObject {
     }
 
     func refresh() {
-        guard !scanning else { return }
+        fetchLive()
+        guard !scanning, Date() >= nextScanAt else { return }
         scanning = true
+        nextScanAt = Date().addingTimeInterval(60)
         Task {
             async let a = claude.scan()
             async let b = codex.scan()
@@ -186,35 +205,40 @@ final class TokenStore: ObservableObject {
             if cx.found { s.insert(.codex) }
             if oc.found { s.insert(.opencode) }
             sources = s
-            loaded = true
+            scanned = true
             publishSnapshot()
             scanning = false
         }
-        fetchLive()
     }
 
     /// Every two minutes at most, doubling up to ten after a 429 or 5xx, like the Claude poll.
     private func fetchLive() {
         guard !fetchingLive, Date() >= nextLiveAt else { return }
         fetchingLive = true
+        checkingLive = true
         nextLiveAt = Date().addingTimeInterval(liveInterval)
         Task {
-            defer { fetchingLive = false; checkedAccount = true; publishSnapshot() }
+            defer { fetchingLive = false; checkingLive = false; checkedAccount = true; publishSnapshot() }
             do {
                 guard let auth = try await Task.detached(operation: readCodexAuth).value else {
-                    liveLimits = nil; liveError = nil; planHistory = nil; activity = nil; return
+                    liveError = liveLimits == nil ? nil : "ChatGPT login unavailable"
+                    return
                 }
+                // Start limits immediately; optional history must not delay their display.
+                async let limitResult = fetchCodexLimits(auth)
+                async let history: PlanHistory? = Date() >= nextHistoryAt ? try? fetchPlanHistory(auth) : nil
+                async let account: AccountActivity? = Date() >= nextHistoryAt ? try? fetchAccountActivity(auth) : nil
+                let live = try await limitResult
+                if let credits = live.credits { liveCredits = credits }
+                if live.hasData { liveLimits = live }
+                liveError = live.hasData ? nil : "no limits or credits for this account"
                 // Both are aggregated daily on the server, so every ten minutes is plenty.
                 if Date() >= nextHistoryAt {
-                    async let h = try? fetchPlanHistory(auth)
-                    async let a = try? fetchAccountActivity(auth)
-                    if let h = await h { planHistory = h.periods.isEmpty ? nil : h }
-                    if let a = await a { activity = a }
-                    nextHistoryAt = Date().addingTimeInterval(600)
+                    let (h, a) = await (history, account)
+                    if let h { planHistory = h.periods.isEmpty ? nil : h }
+                    if let a { activity = a }
+                    if h != nil || a != nil { nextHistoryAt = Date().addingTimeInterval(600) }
                 }
-                let live = try await fetchCodexLimits(auth)
-                liveLimits = live.hasData ? live : nil
-                liveError = live.hasData ? nil : "no limits or credits for this account"
             } catch {
                 liveError = error.localizedDescription
                 if let fe = error as? FetchError, fe.isTransient {
@@ -228,28 +252,49 @@ final class TokenStore: ObservableObject {
 
 extension TokenStore {
     func summary(_ provider: Provider, account: Bool, range: TokenRange, metric: TokenMetric) -> TokenSummary {
-        let now = Date()
-        let calendar = account ? usageUTCCalendar : Calendar.current
-        let key = SummaryKey(provider: provider, account: account, range: range, metric: metric,
-                             bucket: calendar.dateInterval(of: range.unit, for: now)!.start)
-        if let s = summaries[key] { return s }
-        let s = summarize(account ? accountRecords : records, provider: provider, range: range, metric: metric,
-                          now: now, calendar: calendar)
-        summaries[key] = s
-        return s
+        summaries[SummaryKey(provider: provider, account: account, range: range, metric: metric)] ?? TokenSummary()
     }
 
     private func rebuildAccount() {
-        summaries = [:]
-        let local = TokenMix(records.filter { $0.source == .codex })
-        mixFromLogs = local != nil
-        estimatedAccountRecords = activity.map { estimatedRecords($0, mix: local ?? .codex) } ?? []
-        accountRecords = reconciledOpenAIRecords(local: records, account: estimatedAccountRecords)
-        publishSnapshot()
+        aggregationGeneration += 1
+        let generation = aggregationGeneration
+        let records = records, activity = activity
+        aggregating = true
+        Task {
+            let result = await Task.detached {
+                let local = TokenMix(records.filter { $0.provider == .openai })
+                let estimated = activity.map { estimatedRecords($0, mix: local ?? .codex) } ?? []
+                let account = reconciledOpenAIRecords(local: records, account: estimated)
+                var summaries: [SummaryKey: TokenSummary] = [:]
+                let now = Date()
+                for provider in Provider.allCases {
+                    for useAccount in [false, true] where !useAccount || provider == .openai {
+                        for range in TokenRange.allCases {
+                            for metric in TokenMetric.allCases {
+                                summaries[SummaryKey(provider: provider, account: useAccount, range: range, metric: metric)] =
+                                    summarize(useAccount ? account : records, provider: provider, range: range, metric: metric,
+                                              now: now, calendar: useAccount ? usageUTCCalendar : .current)
+                            }
+                        }
+                    }
+                }
+                let sources = Dictionary(grouping: records, by: \.provider).mapValues { Set($0.map(\.source)) }
+                return (estimated, account, summaries, sources, local != nil)
+            }.value
+            guard generation == aggregationGeneration else { return }
+            estimatedAccountRecords = result.0
+            accountRecords = result.1
+            providerSources = result.3
+            mixFromLogs = result.4
+            aggregating = false
+            loaded = scanned
+            summaries = result.2
+            publishSnapshot()
+        }
     }
 
     private func publishSnapshot() {
-        guard loaded && checkedAccount else { return }
+        guard loaded && checkedAccount && !aggregating else { return }
         sharingSnapshot = TokenSnapshot(local: records, account: estimatedAccountRecords)
     }
 }
@@ -258,6 +303,7 @@ extension TokenStore {
 
 enum TokenMetric: String, CaseIterable, Identifiable {
     case cost = "API cost", input = "Input", output = "Output", cacheWrite = "Cache write", cacheRead = "Cache read"
+    var label: String { self == .input ? "Uncached input" : rawValue }
     var id: String { rawValue }
     static let tokenKinds: [TokenMetric] = [.input, .output, .cacheWrite, .cacheRead]
 
@@ -312,7 +358,7 @@ func summarize(_ records: [TokenRecord], provider: Provider, range: TokenRange, 
     var perModel: [String: Double] = [:]
     var s = TokenSummary()
     // Only tag the tool when there is more than one, e.g. "GPT-5.5 · OpenCode".
-    let inRange = records.filter { $0.provider == provider && $0.date >= starts[0] }
+    let inRange = records.filter { $0.provider == provider && $0.date >= starts[0] && $0.date <= now }
     let tagged = Set(inRange.map(\.source)).count > 1
     for r in inRange {
         for m in TokenMetric.allCases { s.totals[m, default: 0] += m.value(r) }
