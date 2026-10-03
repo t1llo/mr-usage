@@ -47,6 +47,7 @@ final class MrUsageAppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.applicationIconImage = AppBranding.icon(isDark: app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
             }
         }
+        UpdateService.shared.dismissPanel = { [weak menu] in menu?.hide() }
         UpdateService.shared.start()
     }
 }
