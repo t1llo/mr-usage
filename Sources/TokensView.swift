@@ -50,6 +50,7 @@ struct TokensView: View {
             if account { content(account: true) }
             else if tokens.loaded && !hasLocal { empty }
             else { content(account: false) }
+            if provider == .claude, let activity = tokens.claudeActivity { ClaudeStatsCard(activity: activity) }
         }
     }
 
@@ -78,7 +79,7 @@ struct TokensView: View {
         let has = tokens.sources.contains
         switch provider {
         case .claude:
-            return "No Claude usage in the last 30 days. Counts appear after your next Claude Code or OpenCode request."
+            return "No Claude usage in the last 30 days. Counts appear after your next Claude Code, OpenCode or Pi request. Desktop-only chats are not in these coding-tool logs."
         case .openai:
             if tokens.planHistory != nil || tokens.activity != nil {
                 return "Token counts by type and API cost come from Codex and OpenCode logs on this Mac, and there are none from the last 30 days yet. Codex writes its log once you send a message."
@@ -103,6 +104,13 @@ struct TokensView: View {
                 .id("\(provider.rawValue)/\(account)")
             Card {
                 VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Total tokens · \(r.rawValue)").font(.system(size: 11)).foregroundStyle(t.subtext)
+                        Spacer(minLength: 4)
+                        Text(compact(s.totalTokens)).font(.system(size: 18, weight: .semibold).monospacedDigit())
+                    }
+                    .help("Uncached input + cache reads + cache writes + output, for the selected range only.")
+                    Rectangle().fill(t.border.opacity(0.6)).frame(height: 0.5)
                     MetricTile(metric: .cost, value: s.totals[.cost] ?? 0, selected: metric == .cost,
                                caption: account ? "Estimated at API prices" : "If billed at API prices",
                                help: account ? costHelp : TokenMetric.cost.help(provider)) { metric = .cost }
@@ -138,20 +146,57 @@ struct TokensView: View {
     private var costHelp: String {
         "What these tokens would cost at OpenAI API list prices (Standard tier). The account reports "
             + "total tokens per day and model; the split into input, cache and output is "
-            + (tokens.mixFromLogs ? "taken from this Mac's Codex/OpenCode logs." : "a typical Codex session's (88% cache reads, 10% input, 2% output).")
+            + (tokens.mixFromLogs ? "taken from this Mac's Codex/OpenCode/Pi logs." : "a typical Codex session's (88% cache reads, 10% input, 2% output).")
     }
 
     private var accountNote: String {
-        "All devices, by UTC day. Local Codex/OpenCode logs fill unreported days without double-counting. Account split and cost estimated from "
-            + (tokens.mixFromLogs ? "this Mac's Codex/OpenCode logs." : "a typical Codex session.")
+        "All devices, by UTC day. Local Codex/OpenCode/Pi logs fill unreported days without double-counting. Account split and cost estimated from "
+            + (tokens.mixFromLogs ? "this Mac's Codex/OpenCode/Pi logs." : "a typical Codex session.")
     }
 
     /// Which tools the numbers come from, or where they would come from.
     private func footnote(_ used: Set<Source>?) -> String {
-        let tools: [Source] = provider == .claude ? [.claudeCode, .opencode] : [.codex, .opencode]
+        let tools: [Source] = provider == .claude ? [.claudeCode, .opencode, .pi] : [.codex, .opencode, .pi]
         let found = tools.filter { used?.contains($0) ?? false }
         if found.isEmpty { return "Reads \(tools.map(\.rawValue).joined(separator: " and ")) logs on this Mac" }
-        return "From \(found.map(\.rawValue).joined(separator: " and ")) sessions on this Mac"
+        return "From \(found.map(\.rawValue).joined(separator: " and ")) sessions on this Mac. Local logs can span multiple accounts; they are not filtered by the Limits login."
+    }
+}
+
+/// Kept separate from chart totals and sharing: the cache has neither complete daily token
+/// kinds nor a reliable account identity. Adding it to transcripts would double-count usage.
+struct ClaudeStatsCard: View {
+    let activity: ClaudeActivity
+    @State private var expanded = false
+    @Environment(\.theme) private var t
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                Button { expanded.toggle() } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Claude Code lifetime").font(.system(size: 11)).foregroundStyle(t.subtext)
+                            Text("\(compact(activity.totalTokens)) tokens").font(.system(size: 18, weight: .semibold).monospacedDigit())
+                        }
+                        Spacer()
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2).foregroundStyle(t.muted)
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                Text("Local /stats cache · \(activity.profile)" + (activity.computedThrough.map { " · through \($0)" } ?? ""))
+                    .font(.system(size: 10)).foregroundStyle(t.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if expanded {
+                    Text("Cache reads: \(compact(activity.cacheRead)) · Active days: \(activity.activeDays)")
+                    if let sessions = activity.sessions { Text("Sessions: \(sessions)") }
+                    if let last = activity.lastActive { Text("Last active: \(last)") }
+                    if let first = activity.firstSession { Text("First session: \(first.formatted(date: .abbreviated, time: .omitted))") }
+                    Text("As reported by Claude Code /stats; may lag logs or count repeated response blocks. The charts count each response once. Not an all-devices or Team total, and not added to the charts or leaderboard.")
+                        .foregroundStyle(t.muted).fixedSize(horizontal: false, vertical: true)
+                }
+            }.font(.system(size: 10))
+        }
     }
 }
 

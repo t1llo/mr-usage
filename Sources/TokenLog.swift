@@ -10,7 +10,7 @@ enum Provider: String, CaseIterable, Identifiable {
 }
 
 enum Source: String {
-    case claudeCode = "Claude Code", codex = "Codex", opencode = "OpenCode"
+    case claudeCode = "Claude Code", codex = "Codex", opencode = "OpenCode", pi = "Pi"
     /// Daily totals from the ChatGPT account, split into token kinds by estimate.
     case chatgpt = "ChatGPT account"
 }
@@ -49,8 +49,8 @@ actor TokenScanner {
     /// earlier lines into a new file, so the same key shows up many times. Keep the largest.
     private var records: [String: TokenRecord] = [:]
     private var fastResponses: Set<String> = []
-    private let root: URL
-    init(root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")) {
+    private let root: URL?
+    init(root: URL? = nil) {
         self.root = root
     }
     private let iso: ISO8601DateFormatter = {
@@ -62,14 +62,16 @@ actor TokenScanner {
     func scan() -> [TokenRecord] {
         let cutoff = Date().addingTimeInterval(-Self.horizon)
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
-        if let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys) {
-            for case let url as URL in files where url.pathExtension == "jsonl" {
-                guard let v = try? url.resourceValues(forKeys: Set(keys)),
-                      let mtime = v.contentModificationDate, mtime >= cutoff,
-                      let size = v.fileSize.map(UInt64.init) else { continue }
-                var start = offsets[url.path] ?? 0
-                if size < start { start = 0 }  // rewritten or truncated
-                if size > start { offsets[url.path] = start + read(url, from: start) }
+        for root in root.map({ [$0] }) ?? ClaudePaths.transcriptRoots {
+            if let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys) {
+                for case let url as URL in files where url.pathExtension == "jsonl" {
+                    guard let v = try? url.resourceValues(forKeys: Set(keys)),
+                          let mtime = v.contentModificationDate, mtime >= cutoff,
+                          let size = v.fileSize.map(UInt64.init) else { continue }
+                    var start = offsets[url.path] ?? 0
+                    if size < start { start = 0 }  // rewritten or truncated
+                    if size > start { offsets[url.path] = start + read(url, from: start) }
+                }
             }
         }
         records = records.filter { $0.value.date >= cutoff }
@@ -148,6 +150,8 @@ final class TokenStore: ObservableObject {
     @Published private(set) var planHistory: PlanHistory?
     /// Lifetime and daily tokens across every Codex surface, the overview in Codex's /usage.
     @Published private(set) var activity: AccountActivity? { didSet { rebuildAccount() } }
+    /// Claude Code's local, lifetime stats cache, never added to the recent log records.
+    @Published private(set) var claudeActivity: ClaudeActivity?
     /// Account estimates plus local usage on UTC days the account has not reported yet.
     private(set) var accountRecords: [TokenRecord] = []
     private var estimatedAccountRecords: [TokenRecord] = []
@@ -178,6 +182,7 @@ final class TokenStore: ObservableObject {
     private let claude = TokenScanner()
     private let codex = CodexScanner()
     private let opencode = OpenCodeReader()
+    private let pi = PiScanner()
 
     init() {
         refresh()
@@ -197,13 +202,17 @@ final class TokenStore: ObservableObject {
             async let a = claude.scan()
             async let b = codex.scan()
             async let c = opencode.scan()
-            let (cl, cx, oc) = await (a, b, c)
-            records = cl + cx.records + oc.records
+            async let d = pi.scan()
+            async let stats = Task.detached { readClaudeActivity(directory: ClaudePaths.directory()) }.value
+            let (cl, cx, oc, piRecords, lifetime) = await (a, b, c, d, stats)
+            records = cl + cx.records + oc.records + piRecords
+            claudeActivity = lifetime
             loggedLimits = cx.limits
             var s = Set<Source>()
             if !cl.isEmpty { s.insert(.claudeCode) }
             if cx.found { s.insert(.codex) }
             if oc.found { s.insert(.opencode) }
+            if !piRecords.isEmpty { s.insert(.pi) }
             sources = s
             scanned = true
             publishSnapshot()
@@ -348,6 +357,8 @@ struct TokenSummary {
     var byModel: [(name: String, value: Double)] = []
     /// Models in range that have no API price, so their tokens are missing from the cost.
     var unpriced: Set<String> = []
+    /// All token kinds, not just new input. Cache reads often dominate Claude totals.
+    var totalTokens: Double { TokenMetric.tokenKinds.reduce(0) { $0 + (totals[$1] ?? 0) } }
 }
 
 func summarize(_ records: [TokenRecord], provider: Provider, range: TokenRange, metric: TokenMetric,

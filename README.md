@@ -5,7 +5,7 @@
 
 # Mr. Usage
 
-Your Claude and OpenAI usage, at a glance. A lightweight macOS menu bar app for Claude Code, Codex, and OpenCode.
+Your Claude and OpenAI usage, at a glance. A lightweight macOS menu bar app for Claude Code, Codex, OpenCode, and Pi.
 
 **[Website & leaderboard →](https://usage.beffa.xyz)**
 

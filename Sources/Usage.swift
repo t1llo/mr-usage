@@ -1,5 +1,49 @@
 // Data layer: read Claude Code's OAuth token, call the usage endpoint `/usage` uses, parse it.
 import Foundation
+import CryptoKit
+
+enum ClaudeLoginSource: String, CaseIterable, Identifiable, Codable {
+    case automatic = "Automatic", claudeCode = "Claude Code", opencode = "OpenCode", pi = "Pi"
+    var id: String { rawValue }
+}
+
+struct ClaudeAuth {
+    let token: String
+    let source: ClaudeLoginSource
+    /// Non-secret identity metadata only. Never save the token or a token-derived identifier.
+    let identity: String
+    let label: String
+    var hasAccountMetadata = false
+}
+
+enum ClaudePaths {
+    static let directoryPreference = "claudeConfigDirectory"
+    static var defaultDirectory: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude") }
+    static func directory(defaults: UserDefaults = .standard) -> URL {
+        let path = defaults.string(forKey: directoryPreference)
+            ?? ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+        guard let path, !path.isEmpty else { return defaultDirectory }
+        return URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+    }
+    static var transcriptRoots: [URL] {
+        Set([defaultDirectory, directory()]).map { $0.appendingPathComponent("projects") }
+    }
+}
+
+var piAgentDirectory: URL {
+    let path = ProcessInfo.processInfo.environment["PI_CODING_AGENT_DIR"]
+    if let path, !path.isEmpty { return URL(fileURLWithPath: (path as NSString).expandingTildeInPath) }
+    return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pi/agent")
+}
+
+/// A custom CLI profile has its own Keychain service, not the personal profile's item.
+func claudeKeychainServices(directory: URL) -> [String] {
+    let path = directory.standardizedFileURL.path.precomposedStringWithCanonicalMapping
+    let suffix = SHA256.hash(data: Data(path.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
+    let hashed = "Claude Code-credentials-\(suffix)"
+    return directory.standardizedFileURL == ClaudePaths.defaultDirectory.standardizedFileURL
+        ? ["Claude Code-credentials", hashed] : [hashed]
+}
 
 struct Limit: Identifiable, Codable {
     let id: String
@@ -24,8 +68,8 @@ enum FetchError: LocalizedError {
     case badJSON
     var errorDescription: String? {
         switch self {
-        case .noToken: return "no Claude login found; sign in with Claude Code or OpenCode"
-        case .http(401, _, _): return "login expired, open Claude Code once"
+        case .noToken: return "selected tool has no usable Claude OAuth login; sign in there, or select another saved login. Claude Desktop has a separate login"
+        case .http(401, _, _): return "selected Claude login expired; renew it in the tool that owns it"
         case .http(429, _, _): return "rate limited"
         case .http(let code, _, let m): return "HTTP \(code)" + (m.map { " (\($0))" } ?? "")
         case .badJSON: return "unexpected response"
@@ -48,10 +92,10 @@ enum FetchError: LocalizedError {
 /// resets the list and throws away any "Always Allow" granted to this app. Asking `security`
 /// to read it avoids both the first prompt and the prompt that used to come back after every
 /// token refresh. Blocking; call it off the main thread.
-func readKeychainToken() -> String? {
+private func readKeychainCredentials(service: String) -> [String: Any]? {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    p.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+    p.arguments = ["find-generic-password", "-s", service, "-w"]
     let out = Pipe()
     p.standardOutput = out
     p.standardError = FileHandle.nullDevice
@@ -63,16 +107,49 @@ func readKeychainToken() -> String? {
           let root = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
           let oauth = root["claudeAiOauth"] as? [String: Any]
     else { return nil }
-    return claudeOAuthToken(oauth)
+    return oauth
 }
 
-/// Read-only fallback for people who use Claude through OpenCode, not Claude Code.
-func readClaudeToken() -> String? {
-    if let token = readKeychainToken() { return token }
-    guard let data = try? Data(contentsOf: openCodeDataDirectory.appendingPathComponent("auth.json")),
-          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let oauth = root["anthropic"] as? [String: Any], oauth["type"] as? String == "oauth" else { return nil }
-    return claudeOAuthToken(oauth, openCode: true)
+private func credentialJSON(_ url: URL) -> [String: Any]? {
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+/// Blocking, read-only. Call off the main thread. Explicit selections never fall through to
+/// a different tool/account; an HTTP 429 must not cause account switching or extra requests.
+func readClaudeAuth(source: ClaudeLoginSource, directory: URL) -> ClaudeAuth? {
+    let candidates: [ClaudeLoginSource] = source == .automatic ? [.claudeCode, .opencode, .pi] : [source]
+    for candidate in candidates {
+        if candidate == .claudeCode {
+            var token: String?
+            for service in claudeKeychainServices(directory: directory) {
+                if let oauth = readKeychainCredentials(service: service), let access = claudeOAuthToken(oauth) {
+                    token = access; break
+                }
+            }
+            // Claude Code also writes this fallback when Keychain is unavailable. Do not modify it.
+            if token == nil, let oauth = credentialJSON(directory.appendingPathComponent(".credentials.json"))?["claudeAiOauth"] as? [String: Any] {
+                token = claudeOAuthToken(oauth)
+            }
+            guard let token else { continue }
+            let config = directory.standardizedFileURL == ClaudePaths.defaultDirectory.standardizedFileURL
+                ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
+                : directory.appendingPathComponent(".claude.json")
+            let account = credentialJSON(config)?["oauthAccount"] as? [String: Any] ?? [:]
+            let accountID = account["accountUuid"] as? String ?? ""
+            let orgID = account["organizationUuid"] as? String ?? ""
+            let details = [account["emailAddress"] as? String, account["organizationName"] as? String].compactMap { $0 }
+            let label = (["Claude Code (\(directory.lastPathComponent))"] + details).joined(separator: " · ")
+            return ClaudeAuth(token: token, source: candidate, identity: "claudeCode|\(directory.path)|\(accountID)|\(orgID)",
+                              label: label, hasAccountMetadata: !accountID.isEmpty && !orgID.isEmpty)
+        }
+        let directory = candidate == .pi ? piAgentDirectory : openCodeDataDirectory
+        guard let oauth = credentialJSON(directory.appendingPathComponent("auth.json"))?["anthropic"] as? [String: Any],
+              oauth["type"] as? String == "oauth", let token = claudeOAuthToken(oauth, openCode: true) else { continue }
+        return ClaudeAuth(token: token, source: candidate, identity: "\(candidate.rawValue)|\(directory.path)",
+                          label: "\(candidate.rawValue) saved Claude login (account identity not reported)")
+    }
+    return nil
 }
 
 var openCodeDataDirectory: URL {

@@ -53,6 +53,7 @@ struct TokenReadersTests {
         let summary = summarize(complete, provider: .claude, range: .week, metric: .input, now: now.addingTimeInterval(1))
         assert(summary.totals[.input] == 19 && summary.totals[.output] == 31)
         assert(summary.totals[.cacheRead] == 100_000 && summary.totals[.cacheWrite] == 100)
+        assert(summary.totalTokens == 100_150, "Total includes uncached input, output and both cache kinds")
         assert(summary.buckets.reduce(0) { $0 + $1.value } == 19)
         print("PASS: Claude streaming/copy deduplication, missing request IDs, cache TTL, ISO timestamps and partial lines")
 
@@ -67,6 +68,57 @@ struct TokenReadersTests {
                             "seven_day_new_model": ["utilization": 56.0], "seven_day_invalid": ["utilization": Double.nan]])
         assert(limits.limits.map(\.label) == ["Session", "Week", "Week · New Model"])
         print("PASS: read-only Claude OAuth expiry and additional Claude model windows")
+
+        let stats = parseClaudeActivity([
+            "modelUsage": ["claude-sonnet-4-6": ["inputTokens": 9_116, "outputTokens": 4_376_078,
+                "cacheReadInputTokens": 844_452_579, "cacheCreationInputTokens": 9_094_745]],
+            "totalSessions": 20, "lastComputedDate": "2026-10-02", "firstSessionDate": "2026-09-01T10:00:00Z",
+            "dailyActivity": [["date": "2026-10-01", "messageCount": 10],
+                              ["date": "2026-10-02", "sessionCount": 1],
+                              ["date": "2026-10-03", "messageCount": 0]]
+        ], profile: "fixture")!
+        assert(stats.totalTokens == 857_932_518 && stats.cacheRead == 844_452_579)
+        assert(stats.sessions == 20 && stats.activeDays == 2 && stats.lastActive == "2026-10-02" && stats.firstSession != nil)
+        assert(parseClaudeActivity([:], profile: "fixture") == nil)
+        print("PASS: separate Claude lifetime stats, full token sum, cache scope and activity dates")
+
+        let piFolder = folder.appendingPathComponent("pi-sessions")
+        try FileManager.default.createDirectory(at: piFolder, withIntermediateDirectories: true)
+        func piLine(_ provider: String, model: String, stamp: Double = 0) throws -> Data {
+            var line = try JSONSerialization.data(withJSONObject: ["type": "message", "id": "entry-\(stamp)",
+                "timestamp": iso.string(from: now), "message": ["role": "assistant", "provider": provider,
+                "model": model, "timestamp": (now.timeIntervalSince1970 - stamp) * 1000,
+                "content": [["type": "text", "text": "synthetic fixture"]],
+                "usage": ["input": 3, "output": 20, "reasoning": 5, "cacheRead": 100_000,
+                          "cacheWrite": 100, "cacheWrite1h": 40, "totalTokens": 100_123,
+                          "cost": ["total": 0]]]])
+            line.append(0x0A); return line
+        }
+        var piData = try piLine("anthropic", model: "claude-sonnet-4-6")
+        piData.append(try piLine("openai-codex", model: "gpt-5.1", stamp: 1))
+        piData.append(try piLine("openai", model: "unknown-model", stamp: 2))
+        piData.append(try piLine("google", model: "gemini", stamp: 3))
+        piData.append(Data("{\"type\":\"compaction\",\"tokensBefore\":999999}\n".utf8))
+        piData.append(try piLine("anthropic", model: "claude-sonnet-4-6", stamp: 4).dropLast())
+        let piLog = piFolder.appendingPathComponent("session.jsonl")
+        try piData.write(to: piLog)
+        try piData.write(to: piFolder.appendingPathComponent("fork.jsonl"))
+        let pi = PiScanner(root: piFolder)
+        let piRecords = await pi.scan()
+        assert(piRecords.count == 3 && piRecords.allSatisfy { $0.source == .pi })
+        assert(piRecords.allSatisfy { $0.input == 3 && $0.output == 20 && $0.cacheRead == 100_000 && $0.cacheWrite1h == 40 })
+        assert(piRecords.first { $0.provider == .claude }?.cost == expected,
+               "Pi reasoning is already included; costs are recalculated even if logged cost is zero")
+        assert(piRecords.first { $0.model == "unknown-model" }?.cost == nil)
+        let piHandle = try FileHandle(forWritingTo: piLog)
+        try piHandle.seekToEnd(); try piHandle.write(contentsOf: Data([0x0A])); try piHandle.close()
+        let piComplete = await pi.scan()
+        assert(piComplete.count == 4, "Only complete lines are read; fork copies count once")
+        try Data().write(to: piLog)
+        try Data().write(to: piFolder.appendingPathComponent("fork.jsonl"))
+        let piRemoved = await pi.scan()
+        assert(piRemoved.isEmpty, "Rewritten/deleted Pi records don't linger")
+        print("PASS: Pi Claude/OpenAI mapping, fork deduplication, complete lines, cache TTL, reasoning and repricing")
 
         let previousHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
         let previousData = ProcessInfo.processInfo.environment["XDG_DATA_HOME"]
@@ -125,5 +177,29 @@ struct TokenReadersTests {
         let removed = await openCode.scan()
         assert(removed.records.isEmpty, "Mutable OpenCode rows are reread, not accumulated")
         print("PASS: OpenCode provider mapping, fork deduplication, model normalization and mutable rows")
+
+        // Only synthetic files: no API-key commands, refresh tokens or credential writes.
+        let previousPi = ProcessInfo.processInfo.environment["PI_CODING_AGENT_DIR"]
+        defer {
+            if let previousPi { setenv("PI_CODING_AGENT_DIR", previousPi, 1) } else { unsetenv("PI_CODING_AGENT_DIR") }
+        }
+        setenv("PI_CODING_AGENT_DIR", piFolder.path, 1)
+        let piAuthFile = piFolder.appendingPathComponent("auth.json")
+        let oauthData = try JSONSerialization.data(withJSONObject: ["anthropic": ["type": "oauth",
+            "access": "fixture-pi", "expires": future, "refresh": "do-not-consume"]])
+        try oauthData.write(to: piAuthFile)
+        try JSONSerialization.data(withJSONObject: ["anthropic": ["type": "oauth", "access": "fixture-open", "expires": future]])
+            .write(to: openCodeDataDirectory.appendingPathComponent("auth.json"))
+        let piAuth = readClaudeAuth(source: .pi, directory: folder)
+        let openAuth = readClaudeAuth(source: .opencode, directory: folder)
+        assert(piAuth?.token == "fixture-pi" && piAuth?.source == .pi && !piAuth!.hasAccountMetadata)
+        assert(openAuth?.token == "fixture-open" && openAuth?.source == .opencode)
+        let unchangedAuth = try Data(contentsOf: piAuthFile)
+        assert(unchangedAuth == oauthData, "OAuth reads must not modify credentials")
+        try JSONSerialization.data(withJSONObject: ["anthropic": ["type": "api_key", "key": "!never-execute-this"]])
+            .write(to: piAuthFile)
+        assert(readClaudeAuth(source: .pi, directory: folder) == nil,
+               "API-key login cannot supply subscription limits; do not fall through to OpenCode")
+        print("PASS: read-only Pi/OpenCode OAuth selection, API-key exclusion and no cross-account fallback")
     }
 }

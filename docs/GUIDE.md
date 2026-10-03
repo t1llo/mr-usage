@@ -13,8 +13,9 @@ Requires **macOS 13 or later**. Downloads support **Apple Silicon and Intel**.
 Published apps are Developer ID-signed and notarized by Apple. A ZIP download and
 SHA-256 checksums are also available on each release.
 
-Sign in through **Claude Code**, **Codex**, or **OpenCode** first. Mr. Usage reuses those
-existing logins; there is no separate provider login to configure in the app.
+Mr. Usage tracks local **Claude Code**, **Codex**, **OpenCode**, and **Pi** logs without a
+provider login. Subscription limits require an existing coding-tool OAuth login.
+Claude's saved login source and CLI profile folder can be selected in Settings.
 
 ### Automatic updates
 
@@ -57,17 +58,37 @@ Only one instance runs at a time.
 
 ### Claude
 
-- **Limits:** reads the `Claude Code-credentials` macOS Keychain item through
-  `/usr/bin/security`, with OpenCode's unexpired Anthropic OAuth login as a fallback,
-  then calls the same usage endpoint as Claude Code's `/usage`. Authentication reads stay off the UI thread.
-- **Tokens:** reads local transcripts under `~/.claude/projects` and Anthropic messages
-  in OpenCode's database. Repeated or streamed copies of a response are counted once.
-  These counts cover this Mac, not claude.ai or other computers.
+- **Limits:** reads Claude Code's macOS Keychain item through `/usr/bin/security`, then
+  calls the same usage endpoint as Claude Code's `/usage`. Automatic initially tries Claude
+  Code, OpenCode, then Pi OAuth; after resolving a tool it stays pinned rather than silently
+  switching accounts on temporary read failures. Explicit selections never fall through.
+  Reads stay off the UI thread, and the app never refreshes another tool's tokens.
+- **Multiple accounts:** choose **Claude limits login** in Settings. For a separate Team CLI
+  profile, choose its configuration folder (`CLAUDE_CONFIG_DIR` is also recognized).
+  Custom profiles use their own hashed Keychain service. CLI account/organization metadata,
+  when available, is displayed locally; OpenCode/Pi do not report account identity.
+  Changing profiles removes previous percentages but keeps the global polling cooldown.
+  **Claude Desktop has a separate login**; signing in there alone does not supply coding-tool OAuth.
+- **Tokens:** reads local transcripts under `~/.claude/projects`, the selected custom CLI
+  profile's `projects` folder, Anthropic messages in OpenCode's database, and Pi session logs.
+  Repeated or streamed copies of a response are counted once. These counts can span accounts
+  and cover this Mac, not claude.ai, Desktop-only chats, or other computers. The Limits login
+  does not filter local logs by account; transcripts do not reliably identify one.
 - **Uncached input** excludes cache reads and writes. Total prompt input includes all three;
   repeatedly reading cached context can produce large cache totals alongside very little new input.
   Claude cache writes remain visible. OpenAI's cache-write tile is hidden when zero.
+- **Total tokens** sums uncached input, cache reads, cache writes, and output for the selected
+  24h/7d/30d range. **Claude Code lifetime** separately shows the selected profile's local
+  `stats-cache.json` total and activity dates, with its computed-through date. This is the
+  local `/stats` cache, can lag transcripts, and is neither an all-devices nor a Team total.
+  Claude's reported cache may also count repeated assistant response blocks; the app's
+  transcript totals deduplicate those responses, so the two figures can differ substantially.
+  It is never added to chart or leaderboard counts, which would double-count usage.
 - The last successful Claude limits and polling cooldown are kept locally across launches.
-  During throttling, cached limits retain their original update time and retries wait for the saved deadline.
+  During throttling, cached limits retain their original update time and retries wait for the
+  saved deadline. HTTP 429 means the usage endpoint is throttling requests, not that the
+  account exhausted its plan. The app shows last-attempt and next-check times, and hides
+  expired windows or readings older than one hour rather than presenting them as current.
 - **Costs:** uses the model's API list prices, including cache reads, 5-minute and 1-hour
   cache writes, and fast mode where recorded.
 
@@ -84,7 +105,7 @@ Only one instance runs at a time.
   in credit units. The newest available live or logged balance is shown with its timestamp;
   this is separate from dollar-denominated API cost estimates.
 - **This Mac:** counts Codex session and archived-session logs plus OpenAI messages in
-  OpenCode's database. Per-response records take precedence over running totals; copied
+  OpenCode's database and Pi. Per-response records take precedence over running totals; copied
   responses and forked OpenCode sessions are deduplicated.
 - **All devices:** uses ChatGPT's daily account history across CLI, IDE, app, cloud, and
   other machines. Account totals replace overlapping Codex/OpenCode logs for each reported
@@ -96,7 +117,14 @@ Only one instance runs at a time.
 
 OpenCode data is read from `opencode*.db` under `$XDG_DATA_HOME/opencode`
 (default `~/.local/share/opencode`), including SQLite WAL data. Provider tokens are never
-refreshed by Mr. Usage; Codex and OpenCode manage their own logins.
+refreshed by Mr. Usage; the coding tools manage their own logins.
+
+Pi logs are read from `~/.pi/agent/sessions` (or `$PI_CODING_AGENT_DIR/sessions`). Anthropic,
+OpenAI, and OpenAI Codex assistant messages are tracked, including forked sessions without
+counting copied messages twice. Pi's output already includes reasoning; its input is uncached.
+Costs are recalculated from model prices rather than trusting a subscription's logged zero cost.
+Other Pi providers, custom session directories outside that root, and compaction context-size
+counts are not included.
 
 ### Timing and limitations
 
@@ -133,11 +161,11 @@ model ID, billing category, uncached input tokens, output tokens (including reas
 cache-read tokens, separate 5-minute and 1-hour cache-write counts, and an account-estimate flag**.
 
 - **OpenAI** shares the same reconciled **All devices** usage as the app when available.
-  Reported account days replace all overlapping local Codex/OpenCode models, rather than
+  Reported account days replace all overlapping local Codex/OpenCode/Pi models, rather than
   adding both sources. Local logs fill unreported UTC days until account totals arrive.
   The website marks these account-wide estimates; token-kind and model splits are estimates.
-- **Claude** includes Claude Code and OpenCode logs on this Mac.
-- When OpenAI account history is unavailable, local Codex and OpenCode logs supply its counts.
+- **Claude** includes Claude Code, OpenCode, and Pi logs on this Mac, not its lifetime stats cache.
+- When OpenAI account history is unavailable, local Codex, OpenCode, and Pi logs supply its counts.
 
 Requests also include a dedicated leaderboard authentication token, data-format version,
 sharing-consent flag, and app identifier. The server sees your connection's IP address.
@@ -213,7 +241,8 @@ The check fails if secrets are detected and redacts secret values from its outpu
 - `Sources/StatusItemReadout.swift`, `AppIcon.swift`: labeled menu-bar meters and light/dark branding.
 - `Sources/Store.swift`, `Usage.swift`: Claude limits and polling.
 - `Sources/ClaudePolling.swift`: persisted Claude snapshots and retry gates, without credentials.
-- `Sources/TokenLog.swift`, `CodexLog.swift`, `OpenCodeLog.swift`: local readers and aggregation.
+- `Sources/TokenLog.swift`, `CodexLog.swift`, `OpenCodeLog.swift`, `PiLog.swift`: local readers and aggregation.
+- `Sources/ClaudeActivity.swift`: separate local Claude Code lifetime stats cache.
 - `Sources/OpenAIUsage.swift`: ChatGPT limits and account history.
 - `Sources/Pricing.swift`: model prices and cost calculations.
 - `Sources/Leaderboard.swift`, `LeaderboardView.swift`: opt-in sharing and settings.
@@ -222,7 +251,7 @@ The check fails if secrets are detected and redacts secret values from its outpu
 - `scripts/build.sh`, `scripts/sign-app.sh`: app packaging and inside-out signing.
 - `scripts/build-icons.sh`: macOS icon generation from the artwork in `docs/assets/`.
 - `scripts/test-leaderboard.sh`: isolated sharing tests.
-- `scripts/test-token-readers.sh`: synthetic Claude, Codex and OpenCode reader/normalization checks.
+- `scripts/test-token-readers.sh`: synthetic Claude, Codex, OpenCode, Pi and lifetime stats checks.
 - `scripts/test-openai-credits.sh`: credit parsing and isolated Codex-log checks.
 - `scripts/test-claude-polling.sh`: cached limits, restart-safe cooldowns and Retry-After checks.
 - `scripts/test-panel-layout.sh`: native popup resizing and interaction checks.

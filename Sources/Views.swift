@@ -59,7 +59,7 @@ enum PanelTab: String, CaseIterable { case limits = "Limits", tokens = "Tokens" 
 
 extension Provider {
     var icon: String { self == .claude ? "sparkle" : "hexagon.fill" }
-    var detail: String { self == .claude ? "Claude Code, OpenCode" : "Codex CLI, OpenCode" }
+    var detail: String { self == .claude ? "Claude Code, OpenCode, Pi" : "Codex CLI, OpenCode, Pi" }
 }
 
 /// "plus" -> "Plus", "prolite" -> "Pro Lite", "self_serve_business_usage_based" -> "Business".
@@ -109,10 +109,11 @@ struct UsagePanel: View {
         } content: {
             VStack(alignment: .leading, spacing: 12) {
                 if showingSettings {
+                    claudeLoginSettings
                     LeaderboardSettingsView(leaderboard: leaderboard)
                 } else {
                     tabContent
-                    if provider == .claude, store.usage != nil, store.lastError != nil, !store.inFlight {
+                    if provider == .claude, tab == .limits, store.displayUsage() != nil, store.lastError != nil, !store.inFlight {
                         ErrorBanner(text: store.status)
                     }
                 }
@@ -271,16 +272,60 @@ struct UsagePanel: View {
     }
 
     @ViewBuilder private func claudeLimits(now: Date) -> some View {
-        if let u = store.usage {
+        if let u = store.displayUsage(now: now) {
             VStack(alignment: .leading, spacing: 10) {
                 limitCards(u, now: now)
                 if let at = store.lastGoodAt {
-                    Text("Updated \(dayClock(at))").font(.system(size: 10)).foregroundStyle(t.muted)
+                    Text("\(store.inFlight ? "Refreshing · " : "")Last reading \(dayClock(at))").font(.system(size: 10)).foregroundStyle(t.muted)
                         .frame(maxWidth: .infinity)
                 }
             }
         } else {
             EmptyState(loading: store.inFlight, text: store.status)
+        }
+        if let label = store.authLabel {
+            Text(label).font(.system(size: 10)).foregroundStyle(t.muted)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity)
+        }
+    }
+
+    private var claudeLoginSettings: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Claude limits login").font(.system(size: 14, weight: .semibold))
+                Picker("Saved login", selection: Binding(get: { store.loginSource }, set: { store.setLoginSource($0) })) {
+                    ForEach(ClaudeLoginSource.allCases) { Text($0.rawValue).tag($0) }
+                }.disabled(store.inFlight)
+                Text(store.authLabel ?? "No saved login selected yet").foregroundStyle(t.subtext)
+                if store.loginSource == .claudeCode || store.loginSource == .automatic {
+                    Text("CLI profile: \(store.configDirectory.path)").textSelection(.enabled)
+                    HStack {
+                        Button("Choose profile folder…") { chooseClaudeProfile() }
+                        Button("Default") { store.setConfigDirectory(ClaudePaths.defaultDirectory) }
+                    }.disabled(store.inFlight)
+                }
+                Text("Select the tool/profile logged into your personal or Team account. Desktop’s login is separate and cannot supply CLI OAuth limits. Log tracking works without a login; API-key usage has no subscription limits.")
+                    .foregroundStyle(t.muted)
+            }.font(.system(size: 10)).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func chooseClaudeProfile() {
+        layout.dismiss()
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let panel = NSOpenPanel()
+            panel.title = "Choose Claude Code configuration folder"
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.showsHiddenFiles = true
+            panel.directoryURL = store.configDirectory
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return }
+                store.setConfigDirectory(url)
+                tokens.refresh()
+            }
         }
     }
 

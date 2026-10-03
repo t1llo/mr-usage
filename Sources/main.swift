@@ -34,13 +34,15 @@ final class MrUsageAppDelegate: NSObject, NSApplicationDelegate {
         self.menu = menu
         let updateTitle = { [weak menu] in
             let provider = UserDefaults.standard.string(forKey: "provider").flatMap(Provider.init(rawValue:)) ?? .claude
-            let limits = provider == .claude ? store.usage?.limits : tokens.codexLimits?.current(now: Date()).limits
+            let limits = provider == .claude ? store.displayUsage()?.limits : tokens.codexLimits?.current(now: Date()).limits
             menu?.setUsage(provider: provider.rawValue, limits: limits ?? [])
         }
         Publishers.Merge(store.objectWillChange, tokens.objectWillChange)
             .receive(on: DispatchQueue.main).sink(receiveValue: updateTitle).store(in: &subscriptions)
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: DispatchQueue.main).sink { _ in updateTitle() }.store(in: &subscriptions)
+        Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+            .sink { _ in updateTitle() }.store(in: &subscriptions)
         updateTitle()
         appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.initial, .new]) { app, _ in
             Task { @MainActor in

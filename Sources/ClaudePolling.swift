@@ -8,11 +8,29 @@ struct ClaudePollingState: Codable {
     private(set) var interval: TimeInterval = 60
     private(set) var nextFetchAt = Date.distantPast
     private(set) var lastFailure: String?
+    private(set) var lastAttemptAt: Date?
+    private(set) var authIdentity: String?
+    private(set) var authSource: ClaudeLoginSource?
+    private(set) var authLabel: String?
 
     mutating func begin(at now: Date) -> Bool {
         guard now >= nextFetchAt else { return false }
         nextFetchAt = now.addingTimeInterval(interval)
+        lastAttemptAt = now
         return true
+    }
+
+    mutating func clearReading() {
+        usage = nil; lastGoodAt = nil; lastFailure = nil
+        authIdentity = nil; authSource = nil; authLabel = nil
+        // A profile change must not erase the global request gate or learned backoff.
+    }
+
+    mutating func selectIdentity(_ auth: ClaudeAuth) {
+        if authIdentity != auth.identity { clearReading() }
+        authIdentity = auth.identity
+        authSource = auth.source
+        authLabel = auth.label
     }
 
     mutating func succeeded(_ usage: Usage, at now: Date) {
