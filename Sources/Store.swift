@@ -18,6 +18,7 @@ final class Store: ObservableObject {
     /// Claude Code rewrites the Keychain item when it refreshes the token. A read that lands in
     /// that window finds nothing, so remember the last token we saw and fall back to it.
     private var cachedToken: String?
+    private var loginGeneration = 0
     private let readAuth: @Sendable (ClaudeLoginSource, URL) -> ClaudeAuth?
     private let fetchLimits: @Sendable (String) async throws -> Usage
     private let currentDate: @Sendable () -> Date
@@ -48,14 +49,13 @@ final class Store: ObservableObject {
     func tick() { if currentDate() >= nextFetchAt { fetch() } }
 
     func setLoginSource(_ source: ClaudeLoginSource) {
-        guard !inFlight, source != loginSource else { return }
+        guard source != loginSource else { return }
         loginSource = source
         defaults.set(source.rawValue, forKey: "claudeLoginSource")
         clearSelectedLogin()
     }
 
     func setConfigDirectory(_ directory: URL) {
-        guard !inFlight else { return }
         defaults.set(directory.standardizedFileURL.path, forKey: ClaudePaths.directoryPreference)
         loginSource = .claudeCode
         defaults.set(loginSource.rawValue, forKey: "claudeLoginSource")
@@ -63,6 +63,7 @@ final class Store: ObservableObject {
     }
 
     private func clearSelectedLogin() {
+        loginGeneration += 1
         cachedToken = nil
         polling.clearReading()
         usage = nil; lastGoodAt = nil; lastError = nil; authLabel = nil
@@ -84,14 +85,17 @@ final class Store: ObservableObject {
         inFlight = true
         // Save the request gate before starting, so quitting/relaunching cannot bypass it.
         polling.save(to: defaults)
+        let generation = loginGeneration
+        let source = loginSource == .automatic ? polling.authSource ?? .automatic : loginSource
+        let directory = configDirectory, reader = readAuth
         Task {
             defer { polling.save(to: defaults); inFlight = false }
             do {
                 // Pin Automatic to its resolved tool after a successful read. A temporary
                 // Keychain failure must not silently select someone else's OpenCode/Pi login.
-                let source = loginSource == .automatic ? polling.authSource ?? .automatic : loginSource
-                let directory = configDirectory, reader = readAuth
-                if let auth = await Task.detached(operation: { reader(source, directory) }).value {
+                let auth = await Task.detached(operation: { reader(source, directory) }).value
+                guard generation == loginGeneration else { return }
+                if let auth {
                     if !auth.hasAccountMetadata, cachedToken != auth.token {
                         // These tools don't report account IDs. A replaced access token could
                         // mean either refresh or account switch: don't reuse its old limits,
@@ -105,11 +109,19 @@ final class Store: ObservableObject {
                 }
                 guard let token = cachedToken else { throw FetchError.noToken }
                 let fresh = try await fetchLimits(token)
+                guard generation == loginGeneration else { return }
                 polling.succeeded(fresh, at: currentDate())
                 usage = fresh
                 lastGoodAt = polling.lastGoodAt
                 lastError = nil
             } catch {
+                guard generation == loginGeneration else {
+                    // Throttling belongs to the global gate, even after selecting a new login.
+                    if let failure = error as? FetchError, failure.isTransient {
+                        polling.failed(failure, at: currentDate())
+                    }
+                    return
+                }
                 if case FetchError.http(401, _, _) = error { cachedToken = nil }
                 lastError = error.localizedDescription
                 polling.failed(error, at: currentDate())

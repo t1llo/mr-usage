@@ -112,6 +112,34 @@ struct ClaudePollingTests {
         assert(tracked.displayUsage()?.limits.first?.pct == 8)
         assert(tracked.displayUsage(now: fixture.date.addingTimeInterval(3601)) == nil, "Hide hours-old percentages even before reset")
         assert(tracked.usage?.limits.first?.pct == 8, "Keep last-good data internally")
+        defaults.removePersistentDomain(forName: name)
+        let pending = PendingFetch()
+        let switching = Store(defaults: defaults, startPolling: false,
+                              readAuth: { _, _ in personal }, fetchLimits: { _ in try await pending.fetch() },
+                              currentDate: { now })
+        switching.tick()
+        try await pending.waitUntilStarted()
+        let originalGate = switching.nextFetchAt
+        switching.setLoginSource(.pi)
+        assert(switching.loginSource == .pi && switching.usage == nil && switching.nextFetchAt == originalGate)
+        pending.continuation?.resume(returning: usage)
+        try await wait(switching)
+        assert(switching.usage == nil && switching.authLabel == nil, "Discard the previous login's in-flight result")
+
+        defaults.removePersistentDomain(forName: name)
+        let throttled = PendingFetch()
+        let changingProfile = Store(defaults: defaults, startPolling: false,
+                                    readAuth: { _, _ in personal }, fetchLimits: { _ in try await throttled.fetch() },
+                                    currentDate: { now })
+        changingProfile.tick()
+        try await throttled.waitUntilStarted()
+        changingProfile.setConfigDirectory(custom)
+        throttled.continuation?.resume(throwing: FetchError.http(429, retryAfter: 7200, message: nil))
+        try await wait(changingProfile)
+        assert(changingProfile.configDirectory == custom && changingProfile.usage == nil && changingProfile.lastError == nil)
+        assert(changingProfile.nextFetchAt == now.addingTimeInterval(7200),
+               "An old login's in-flight 429 still extends the global cooldown")
+        print("PASS: login/profile changes during requests reject stale results and preserve server throttling")
         print("PASS: automatic source pinning, temporary Keychain failures, in-flight guards, profile switching and stale/expired readings")
     }
 
@@ -150,5 +178,19 @@ private final class AuthFixture: @unchecked Sendable {
         assert(token.hasPrefix("fixture-"))
         if let error { throw error }
         return usage
+    }
+}
+
+@MainActor private final class PendingFetch {
+    var continuation: CheckedContinuation<Usage, Error>?
+    func fetch() async throws -> Usage {
+        try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+    func waitUntilStarted() async throws {
+        for _ in 0..<500 {
+            if continuation != nil { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw NSError(domain: "fixture", code: 2, userInfo: [NSLocalizedDescriptionKey: "Synthetic fetch did not start"])
     }
 }

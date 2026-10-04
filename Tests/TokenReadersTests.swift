@@ -57,6 +57,44 @@ struct TokenReadersTests {
         assert(summary.buckets.reduce(0) { $0 + $1.value } == 19)
         print("PASS: Claude streaming/copy deduplication, missing request IDs, cache TTL, ISO timestamps and partial lines")
 
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let chartNow = isoDate("2026-11-01T08:30:00Z")!
+        let chartRecords = (0..<160).map { i in
+            TokenRecord(date: chartNow.addingTimeInterval(Double(-i * 1800)),
+                        model: i % 3 == 0 ? "unknown" : "gpt-5.1", provider: i % 4 == 0 ? .claude : .openai,
+                        source: i % 2 == 0 ? .codex : .opencode,
+                        input: i, output: i * 2, cacheWrite: i * 3, cacheRead: i * 4,
+                        cost: i % 3 == 0 ? nil : Double(i) / 100)
+        }
+        for provider in Provider.allCases {
+            for range in TokenRange.allCases {
+                let batch = summarizeMetrics(chartRecords, provider: provider, range: range, now: chartNow, calendar: calendar)
+                for metric in TokenMetric.allCases {
+                    let summary = batch[metric]!
+                    let selected = chartRecords.filter {
+                        $0.provider == provider && $0.date >= summary.buckets.first!.start && $0.date <= chartNow
+                    }
+                    for kind in TokenMetric.allCases {
+                        assert(abs((summary.totals[kind] ?? 0) - selected.reduce(0) { $0 + kind.value($1) }) < 0.00001)
+                    }
+                    for bucket in summary.buckets {
+                        let expected = selected.filter {
+                            calendar.dateInterval(of: range.unit, for: $0.date)!.start == bucket.start
+                        }.reduce(0) { $0 + metric.value($1) }
+                        assert(abs(bucket.value - expected) < 0.00001, "Buckets must remain correct across DST")
+                    }
+                    let tagged = Set(selected.map(\.source)).count > 1
+                    let grouped = Dictionary(grouping: selected) {
+                        modelName($0.model) + (tagged ? " · \($0.source.rawValue)" : "")
+                    }.mapValues { $0.reduce(0) { $0 + metric.value($1) } }.filter { $0.value > 0 }
+                    assert(Dictionary(uniqueKeysWithValues: summary.byModel.map { ($0.name, $0.value) }) == grouped)
+                    assert(summary.unpriced == Set(selected.filter { $0.cost == nil }.map { modelName($0.model) }))
+                }
+            }
+        }
+        print("PASS: all chart metrics, provider/source grouping, unpriced models and DST bucket boundaries")
+
         let future = now.addingTimeInterval(600).timeIntervalSince1970 * 1000
         let expired = now.addingTimeInterval(-600).timeIntervalSince1970 * 1000
         assert(claudeOAuthToken(["accessToken": "fixture", "expiresAt": future], now: now) == "fixture")
@@ -110,12 +148,21 @@ struct TokenReadersTests {
         assert(piRecords.first { $0.provider == .claude }?.cost == expected,
                "Pi reasoning is already included; costs are recalculated even if logged cost is zero")
         assert(piRecords.first { $0.model == "unknown-model" }?.cost == nil)
+        let piCached = await pi.scan()
+        assert(piCached.count == piRecords.count, "Unchanged files retain their deduplicated records")
         let piHandle = try FileHandle(forWritingTo: piLog)
         try piHandle.seekToEnd(); try piHandle.write(contentsOf: Data([0x0A])); try piHandle.close()
         let piComplete = await pi.scan()
         assert(piComplete.count == 4, "Only complete lines are read; fork copies count once")
+        try FileManager.default.removeItem(at: piFolder.appendingPathComponent("fork.jsonl"))
+        let piAfterDeletion = await pi.scan()
+        assert(piAfterDeletion.count == 4, "Deleting a copied file must retain records in surviving files")
+        let rewritten = try piLine("anthropic", model: "claude-sonnet-4-6", stamp: 8)
+        try rewritten.write(to: piLog)
+        let piRewritten = await pi.scan()
+        assert(piRewritten.count == 1 && abs(piRewritten[0].date.timeIntervalSince(now.addingTimeInterval(-8))) < 0.001,
+               "Rewritten files replace cached messages")
         try Data().write(to: piLog)
-        try Data().write(to: piFolder.appendingPathComponent("fork.jsonl"))
         let piRemoved = await pi.scan()
         assert(piRemoved.isEmpty, "Rewritten/deleted Pi records don't linger")
         print("PASS: Pi Claude/OpenAI mapping, fork deduplication, complete lines, cache TTL, reasoning and repricing")

@@ -91,7 +91,7 @@ struct UsagePanel: View {
     @State private var picking = false
     @State private var choosingTheme = false
     @State private var showingSettings = false
-    @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var openAtLogin = false
 
     private var t: Theme { Theme.named(themeID) }
     private var page: String { showingSettings ? "settings" : "\(provider.rawValue)/\(tab.rawValue)" }
@@ -129,7 +129,13 @@ struct UsagePanel: View {
         .environment(\.colorScheme, t.isDark ? .dark : .light)
         .preferredColorScheme(t.isDark ? .dark : .light)
         .onChange(of: layout.isPresented) { presented in
-            if presented { store.tick(); tokens.refresh() }
+            if presented {
+                store.tick(); tokens.refresh()
+                Task {
+                    let enabled = await Task.detached { SMAppService.mainApp.status == .enabled }.value
+                    openAtLogin = enabled
+                }
+            }
             else { picking = false; choosingTheme = false }
         }
         .onExitCommand {
@@ -139,23 +145,28 @@ struct UsagePanel: View {
             else { layout.dismiss() }
         }
         .onChange(of: tab) { if $0 == .tokens { tokens.refresh() } }
-        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
-            if layout.isPresented && tab == .tokens && !showingSettings { tokens.refresh() }
-        }
     }
 
     @ViewBuilder private var tabContent: some View {
         switch tab {
         case .limits:
             // Re-render every 30 s so countdowns and pace markers stay current while open.
-            TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                switch provider {
-                case .claude: claudeLimits(now: ctx.date)
-                case .openai: openAILimits(now: ctx.date)
+            if layout.isPresented {
+                TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                    providerLimits(now: ctx.date)
                 }
+            } else {
+                providerLimits(now: Date())
             }
         case .tokens:
             TokensView(tokens: tokens, provider: provider)
+        }
+    }
+
+    @ViewBuilder private func providerLimits(now: Date) -> some View {
+        switch provider {
+        case .claude: claudeLimits(now: now)
+        case .openai: openAILimits(now: now)
         }
     }
 
@@ -190,9 +201,9 @@ struct UsagePanel: View {
                 }
                 Button { store.tick(); tokens.refresh() } label: {
                     Image(systemName: "arrow.clockwise")
-                        .rotationEffect(.degrees(store.inFlight ? 360 : 0))
-                        .animation(store.inFlight ? .linear(duration: 1).repeatForever(autoreverses: false) : .default,
-                                   value: store.inFlight)
+                        .rotationEffect(.degrees(store.inFlight && layout.isPresented ? 360 : 0))
+                        .animation(store.inFlight && layout.isPresented ? .linear(duration: 1).repeatForever(autoreverses: false) : .default,
+                                   value: store.inFlight && layout.isPresented)
                 }
                 .buttonStyle(PanelToolbarButtonStyle())
                 .keyboardShortcut("r")
@@ -295,14 +306,14 @@ struct UsagePanel: View {
                 Text("Claude limits login").font(.system(size: 14, weight: .semibold))
                 Picker("Saved login", selection: Binding(get: { store.loginSource }, set: { store.setLoginSource($0) })) {
                     ForEach(ClaudeLoginSource.allCases) { Text($0.rawValue).tag($0) }
-                }.disabled(store.inFlight)
+                }
                 Text(store.authLabel ?? "No saved login selected yet").foregroundStyle(t.subtext)
                 if store.loginSource == .claudeCode || store.loginSource == .automatic {
                     Text("CLI profile: \(store.configDirectory.path)").textSelection(.enabled)
                     HStack {
                         Button("Choose profile folder…") { chooseClaudeProfile() }
                         Button("Default") { store.setConfigDirectory(ClaudePaths.defaultDirectory) }
-                    }.disabled(store.inFlight)
+                    }
                 }
                 Text("Select the tool/profile logged into your personal or Team account. Desktop’s login is separate and cannot supply CLI OAuth limits. Log tracking works without a login; API-key usage has no subscription limits.")
                     .foregroundStyle(t.muted)

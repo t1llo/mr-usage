@@ -266,39 +266,44 @@ extension TokenStore {
 
     private func rebuildAccount() {
         aggregationGeneration += 1
-        let generation = aggregationGeneration
-        let records = records, activity = activity
+        guard !aggregating else { return }
         aggregating = true
         Task {
-            let result = await Task.detached {
-                let local = TokenMix(records.filter { $0.provider == .openai })
-                let estimated = activity.map { estimatedRecords($0, mix: local ?? .codex) } ?? []
-                let account = reconciledOpenAIRecords(local: records, account: estimated)
-                var summaries: [SummaryKey: TokenSummary] = [:]
-                let now = Date()
-                for provider in Provider.allCases {
-                    for useAccount in [false, true] where !useAccount || provider == .openai {
-                        for range in TokenRange.allCases {
-                            for metric in TokenMetric.allCases {
-                                summaries[SummaryKey(provider: provider, account: useAccount, range: range, metric: metric)] =
-                                    summarize(useAccount ? account : records, provider: provider, range: range, metric: metric,
-                                              now: now, calendar: useAccount ? usageUTCCalendar : .current)
+            // Coalesce scans and account responses arriving during an aggregation.
+            while true {
+                let generation = aggregationGeneration
+                let records = records, activity = activity
+                let result = await Task.detached(priority: .utility) {
+                    let local = TokenMix(records.filter { $0.provider == .openai })
+                    let estimated = activity.map { estimatedRecords($0, mix: local ?? .codex) } ?? []
+                    let account = reconciledOpenAIRecords(local: records, account: estimated)
+                    var summaries: [SummaryKey: TokenSummary] = [:]
+                    let now = Date()
+                    for provider in Provider.allCases {
+                        for useAccount in [false, true] where !useAccount || provider == .openai {
+                            for range in TokenRange.allCases {
+                                let batch = summarizeMetrics(useAccount ? account : records, provider: provider, range: range,
+                                                             now: now, calendar: useAccount ? usageUTCCalendar : .current)
+                                for (metric, summary) in batch {
+                                    summaries[SummaryKey(provider: provider, account: useAccount, range: range, metric: metric)] = summary
+                                }
                             }
                         }
                     }
-                }
-                let sources = Dictionary(grouping: records, by: \.provider).mapValues { Set($0.map(\.source)) }
-                return (estimated, account, summaries, sources, local != nil)
-            }.value
-            guard generation == aggregationGeneration else { return }
-            estimatedAccountRecords = result.0
-            accountRecords = result.1
-            providerSources = result.3
-            mixFromLogs = result.4
-            aggregating = false
-            loaded = scanned
-            summaries = result.2
-            publishSnapshot()
+                    let sources = Dictionary(grouping: records, by: \.provider).mapValues { Set($0.map(\.source)) }
+                    return (estimated, account, summaries, sources, local != nil)
+                }.value
+                guard generation == aggregationGeneration else { continue }
+                estimatedAccountRecords = result.0
+                accountRecords = result.1
+                providerSources = result.3
+                mixFromLogs = result.4
+                aggregating = false
+                loaded = scanned
+                summaries = result.2
+                publishSnapshot()
+                break
+            }
         }
     }
 
@@ -363,35 +368,55 @@ struct TokenSummary {
 
 func summarize(_ records: [TokenRecord], provider: Provider, range: TokenRange, metric: TokenMetric,
                now: Date = Date(), calendar cal: Calendar = .current) -> TokenSummary {
+    summarizeMetrics(records, provider: provider, range: range, now: now, calendar: cal)[metric] ?? TokenSummary()
+}
+
+/// Share filtering, model names and bucket lookup across all five chart metrics.
+func summarizeMetrics(_ records: [TokenRecord], provider: Provider, range: TokenRange,
+                      now: Date = Date(), calendar cal: Calendar = .current) -> [TokenMetric: TokenSummary] {
     let last = cal.dateInterval(of: range.unit, for: now)!.start
     let starts = (0..<range.count).map { cal.date(byAdding: range.unit, value: $0 - range.count + 1, to: last)! }
-    var perBucket: [Date: Double] = [:]
-    var perModel: [String: Double] = [:]
-    var s = TokenSummary()
-    // Only tag the tool when there is more than one, e.g. "GPT-5.5 · OpenCode".
     let inRange = records.filter { $0.provider == provider && $0.date >= starts[0] && $0.date <= now }
     let tagged = Set(inRange.map(\.source)).count > 1
+    let metrics = TokenMetric.allCases
+    var totals: [TokenMetric: Double] = [:]
+    var buckets = Array(repeating: Array(repeating: 0.0, count: starts.count), count: metrics.count)
+    var models = Array(repeating: [String: Double](), count: metrics.count)
+    var names: [String: String] = [:]
+    var unpriced: Set<String> = []
     for r in inRange {
-        for m in TokenMetric.allCases { s.totals[m, default: 0] += m.value(r) }
-        if r.cost == nil { s.unpriced.insert(modelName(r.model)) }
-        let v = metric.value(r)
-        perBucket[bucketStart(r.date, in: starts), default: 0] += v
-        perModel[modelName(r.model) + (tagged ? " · \(r.source.rawValue)" : ""), default: 0] += v
+        let name = names[r.model] ?? modelName(r.model)
+        names[r.model] = name
+        if r.cost == nil { unpriced.insert(name) }
+        let label = name + (tagged ? " · \(r.source.rawValue)" : "")
+        let bucket = bucketIndex(r.date, in: starts)
+        for (index, metric) in metrics.enumerated() {
+            let value = metric.value(r)
+            totals[metric, default: 0] += value
+            buckets[index][bucket] += value
+            models[index][label, default: 0] += value
+        }
     }
-    s.buckets = starts.map { TokenBucket(start: $0, value: perBucket[$0] ?? 0) }
-    s.byModel = perModel.filter { $0.value > 0 }.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
-    return s
+    var result: [TokenMetric: TokenSummary] = [:]
+    for (index, metric) in metrics.enumerated() {
+        result[metric] = TokenSummary(
+            buckets: starts.enumerated().map { TokenBucket(start: $0.element, value: buckets[index][$0.offset]) },
+            totals: totals,
+            byModel: models[index].filter { $0.value > 0 }.sorted { $0.value > $1.value }.map { ($0.key, $0.value) },
+            unpriced: unpriced)
+    }
+    return result
 }
 
 /// The last bucket start at or before `date`, by binary search: far cheaper per record than
 /// asking the calendar, and exact across DST changes because `starts` came from the calendar.
-private func bucketStart(_ date: Date, in starts: [Date]) -> Date {
+private func bucketIndex(_ date: Date, in starts: [Date]) -> Int {
     var lo = 0, hi = starts.count - 1
     while lo < hi {
         let mid = (lo + hi + 1) / 2
         if starts[mid] <= date { lo = mid } else { hi = mid - 1 }
     }
-    return starts[lo]
+    return lo
 }
 
 /// "claude-opus-5-5" -> "Opus 5.5", "claude-haiku-4-5-20251001" -> "Haiku 4.5",
