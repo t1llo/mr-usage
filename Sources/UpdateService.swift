@@ -19,6 +19,7 @@ final class UpdateService: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
     var dismissPanel: (() -> Void)?
     private let logger = Logger(subsystem: "local.tillobeffa.ClaudeUsageBar", category: "Updates")
     private lazy var controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: self)
+    private let connectivityRecovery = UpdateConnectivityRecovery()
 
     override init() {
         super.init()
@@ -37,6 +38,9 @@ final class UpdateService: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
             // Capture startup failures instead of only logging an error behind the popup.
             try controller.updater.start()
             started = true
+            if controller.updater.automaticallyChecksForUpdates {
+                controller.updater.checkForUpdatesInBackground()
+            }
         } catch {
             status = "Updater could not start: \(error.localizedDescription)"
             logger.error("Updater startup failed: \(error.localizedDescription, privacy: .public)")
@@ -62,8 +66,20 @@ final class UpdateService: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
             action()
         }
     }
-    func setAutomaticChecks(_ enabled: Bool) { controller.updater.automaticallyChecksForUpdates = enabled }
+    func setAutomaticChecks(_ enabled: Bool) {
+        if !enabled { connectivityRecovery.cancel() }
+        controller.updater.automaticallyChecksForUpdates = enabled
+    }
     func setAutomaticDownloads(_ enabled: Bool) { controller.updater.automaticallyDownloadsUpdates = enabled }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        connectivityRecovery.updateCycleFinished(error: error,
+            isAutomaticCheck: updateCheck == .updatesInBackground && updater.automaticallyChecksForUpdates) { [weak updater] in
+            guard let updater, updater.automaticallyChecksForUpdates, !updater.sessionInProgress else { return false }
+            updater.checkForUpdatesInBackground()
+            return true
+        }
+    }
 
     var checkTitle: String {
         readyToInstall ? "Install Update…" : availableVersion != nil ? "Show Update…" : "Check for Updates…"

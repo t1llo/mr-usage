@@ -8,5 +8,6 @@ if [ ! -d "$SPARKLE/Sparkle.framework" ]; then swift build --product ClaudeUsage
 swiftc -target "$(uname -m)-apple-macos13.0" -F "$SPARKLE" -framework Sparkle \
   -Xlinker -rpath -Xlinker "$SPARKLE" -o build/UpdateServiceTests \
   Sources/Usage.swift Sources/Theme.swift Sources/StatusItemReadout.swift \
-  Sources/MenuBarApplication.swift Sources/MenuBarPanel.swift Sources/UpdateService.swift Tests/UpdateServiceTests.swift
+  Sources/MenuBarApplication.swift Sources/MenuBarPanel.swift Sources/UpdateService.swift \
+  Sources/UpdateConnectivityRecovery.swift Tests/UpdateServiceTests.swift
 build/UpdateServiceTests
